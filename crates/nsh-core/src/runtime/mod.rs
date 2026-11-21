@@ -37,6 +37,7 @@ mod updater;
 mod url_scheme;
 mod websocket;
 mod webview;
+mod widget;
 
 pub use updater::{
     PackageVersion, UpdatePrompt, UpdatePromptOptions, UpdaterHost, UpdaterSink, prompt_for_update,
@@ -103,8 +104,13 @@ pub fn registries() -> &'static [Registry] {
         };
         let mut updater = Registry::runtime("nsh/updater");
         updater.module::<updater::Updater>();
+        let mut widget = Registry::runtime("nsh/widget");
+        widget
+            .module::<widget::Widget>()
+            .register::<crate::widget::WidgetAction>()
+            .register::<crate::widget::WidgetDate>();
         vec![
-            nsh, desktop, mobile, os, net, process, fs, websocket, updater,
+            nsh, desktop, mobile, os, net, process, fs, websocket, updater, widget,
         ]
     })
 }

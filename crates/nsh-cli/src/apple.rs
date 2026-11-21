@@ -222,6 +222,9 @@ pub(crate) struct MacosConfig {
     /// `Contents/PlugIns/` ([`crate::app_extensions`]).
     #[serde(default)]
     pub(crate) extensions: Vec<crate::app_extensions::AppExtension>,
+    /// macOS-specific widget packaging options (`macos.widgets`).
+    #[serde(default)]
+    pub(crate) widgets: nsh_core::widget::MacosWidgetsConfig,
 }
 
 /// `nsh.json` `macos.activationPolicy`, as GPUI's `ActivationPolicy`. Read

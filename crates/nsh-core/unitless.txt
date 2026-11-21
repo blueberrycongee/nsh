@@ -467,3 +467,13 @@ element::rows::RowAccessor::values ->                                 # the app'
 element::rows::RowAccessor::values_now ->                             # the app's data: numbers of any unit, which a component scales
 
 style::TextStyle.line_height_em                                  # a line-height length in multiples of the element font size
+widget::WidgetTimelineDataEntry.relevance                        # Smart Stack relevance score, 0..1
+widget::components::WidgetDateProps.date                         # Unix timestamp in milliseconds (JS number)
+widget::ir::WidgetBoxStyle.opacity                               # an opacity, 0..1
+widget::ir::WidgetColor.dark                                     # sRGB color channels, 0..1
+widget::ir::WidgetColor.light                                    # sRGB color channels, 0..1
+widget::ir::WidgetFill::LinearGradient.angle_deg                 # CSS gradient angle in degrees for cross-language IR
+widget::ir::WidgetGradientStop.position                          # gradient stop position, 0..1
+widget::ir::WidgetLayout.flex_grow                               # CSS flex-grow weight (unitless ratio)
+widget::ir::WidgetNode::Progress.value                           # progress fraction, 0..1
+widget::ir::WidgetTimelineIrEntry.relevance                      # Smart Stack relevance score, 0..1

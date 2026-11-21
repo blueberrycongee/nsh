@@ -595,6 +595,14 @@ struct SecondInstances {
     next: Option<AnswerSlot<crate::single_instance::SecondInstance>>,
 }
 
+/// Interactive widget actions queued for `Widget.on("action", ...)`.
+#[derive(Default)]
+struct WidgetActions {
+    pending: std::collections::VecDeque<crate::widget::WidgetActionEvent>,
+    next: Option<AnswerSlot<crate::widget::WidgetActionEvent>>,
+    listening: bool,
+}
+
 /// The speech recognition session running ([`crate::speech`]).
 struct SpeechSession {
     id: u32,
@@ -709,6 +717,7 @@ pub(super) struct Components {
     /// The links that open the app ([`crate::url_scheme`]).
     url_schemes: UrlScheme,
     second_instances: SecondInstances,
+    widget_actions: WidgetActions,
     open_files: OpenFiles,
     /// Calls of the embedding app's functions (`nsh/host`), by request id:
     /// their answers.
@@ -883,6 +892,7 @@ impl Default for Components {
             notifications: Notifications::default(),
             url_schemes: UrlScheme::default(),
             second_instances: SecondInstances::default(),
+            widget_actions: WidgetActions::default(),
             open_files: OpenFiles::default(),
             host_calls: FxHashMap::default(),
             next_host_call: 1,
@@ -6538,6 +6548,21 @@ impl<M: TextEngine> Core<M> {
                     None => launches.next = Some(answer),
                 }
             }
+            Action::NextWidgetAction(answer) => {
+                let actions = &mut self.components.widget_actions;
+                let notify = !actions.listening;
+                actions.listening = true;
+                match actions.pending.pop_front() {
+                    Some(event) => answer.borrow_mut().deliver(event),
+                    None => actions.next = Some(answer),
+                }
+                if notify {
+                    let _ = self.apply_op(Op::Command {
+                        id: crate::ROOT_ID,
+                        command: Command::Widget(crate::widget::WidgetCommand::ListenActions),
+                    });
+                }
+            }
             Action::NextAppUrlChange(answer) => {
                 let links = &mut self.components.url_schemes;
                 links.hears_changes = true;
@@ -7452,6 +7477,26 @@ impl<M: TextEngine> Core<M> {
                         launches.pending.pop_front();
                     }
                     launches.pending.push_back(launch);
+                }
+                true
+            }
+            EventKind::WidgetAction if id == crate::ROOT_ID => {
+                let EventPayload::Json(json) = payload else {
+                    return false;
+                };
+                let Ok(event) =
+                    serde_json::from_value::<crate::widget::WidgetActionEvent>(json.clone())
+                else {
+                    return false;
+                };
+                let actions = &mut self.components.widget_actions;
+                if let Some(answer) = actions.next.take() {
+                    answer.borrow_mut().deliver(event);
+                } else {
+                    if actions.pending.len() == crate::widget::MAX_PENDING_ACTIONS {
+                        actions.pending.pop_front();
+                    }
+                    actions.pending.push_back(event);
                 }
                 true
             }

@@ -1190,3 +1190,52 @@ fn uniform_value<I: HostInput>(input: &I, depth: u32) -> Option<crate::shader::U
         .collect::<Option<Vec<_>>>()
         .map(UniformValue::List)
 }
+
+/// Optional platform-neutral widget visual hints (`widget={{ ... }}`).
+impl HostValue for crate::widget::WidgetHints {
+    fn decode<I: HostInput>(input: &I, cx: &mut HostCx) -> Option<Self> {
+        if input.is_nullish() {
+            return None;
+        }
+        if !input.is_object() {
+            cx.warn("widget: expected an object");
+            return None;
+        }
+        let mut hints = crate::widget::WidgetHints::default();
+        if let Some(v) = input.field("accentable")
+            && !v.is_nullish()
+        {
+            hints.accentable = v.as_bool();
+        }
+        if let Some(v) = input.field("accentedRenderingMode")
+            && !v.is_nullish()
+        {
+            hints.accented_rendering_mode =
+                <crate::widget::WidgetAccentedImageMode as HostValue>::decode(&v, cx);
+        }
+        if let Some(v) = input.field("containerBackground")
+            && !v.is_nullish()
+        {
+            hints.container_background = v.as_bool();
+        }
+        Some(hints)
+    }
+
+    fn ts_type(types: &mut TsTypes) -> String {
+        let mode = <crate::widget::WidgetAccentedImageMode as HostValue>::ts_type(types);
+        types.declare("WidgetHints", |_| {
+            format!(
+                "/** Optional platform-neutral visual hints for elements rendered inside widgets. */\n\
+                 export interface WidgetHints {{\n  \
+                   /** Include or exclude this element from the macOS Tinted accent group. */\n  \
+                   accentable?: boolean;\n  \
+                   /** How an `<Image>` renders in macOS 15+ Tinted mode. */\n  \
+                   accentedRenderingMode?: {mode};\n  \
+                   /** Control whether the root background lifts to `.containerBackground(for: .widget)`. */\n  \
+                   containerBackground?: boolean;\n\
+                 }}"
+            )
+        });
+        "WidgetHints".into()
+    }
+}

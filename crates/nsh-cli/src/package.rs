@@ -283,6 +283,9 @@ pub(crate) struct AppConfig {
     /// What Android packages set in their manifest.
     #[serde(default)]
     pub(crate) android: AndroidConfig,
+    /// Platform-neutral desktop/mobile widgets declared by the app (`"widgets"`).
+    #[serde(default)]
+    pub(crate) widgets: Vec<nsh_core::widget::WidgetEntryConfig>,
 }
 
 /// `nsh.json` `"android"`.
@@ -1018,6 +1021,13 @@ pub(crate) fn read_config(entry: &Path) -> anyhow::Result<AppConfig> {
         .map(|screen| screen.relative_to(dir));
     config.ios.check(ApplePlatform::Ios)?;
     config.macos.check()?;
+    if !config.widgets.is_empty() {
+        let warnings =
+            nsh_core::widget::validate_widgets(&config.widgets).map_err(anyhow::Error::msg)?;
+        for warning in warnings {
+            ui::warn(warning);
+        }
+    }
     config.web.host = config.web.host.map(|host| dir.join(host));
     config.localizations = app_localizations(dir, config.locales.as_ref());
     Ok(config)
@@ -1330,6 +1340,7 @@ pub(crate) fn package(mut options: PackageOptions<'_>) -> anyhow::Result<()> {
         }
     }
     let entry = dunce::canonicalize(options.entry)?;
+    crate::check::check_widgets(&entry)?;
     // What the app's crates and nshm declare for the package (an
     // `Info.plist` key, a manifest entry), under what `nsh.json` sets.
     if let Some((triple, platform)) = options.target.module_meta_triple()

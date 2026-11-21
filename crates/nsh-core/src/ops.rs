@@ -276,6 +276,7 @@ events! {
     AuthSession = "onAuthSession" as "": "A [`Command::AuthSession`] request finished (root only; payload: `id`, then the callback `url`, `action` `\"cancelled\"`, or `error` with its `code`; [`crate::auth_session`]; never reaches a listener).",
     FocusIn = "onFocusIn": "The keyboard focus came into the view: onto it or a view inside it, from outside (it entered `focus-within`; raised by the core). Moving between views inside it is no new coming in.",
     FocusOut = "onFocusOut": "The keyboard focus left the view: from it or a view inside it to one outside, or to none (it left `focus-within`; raised by the core).",
+    WidgetAction = "onWidgetAction" as "": "An interactive button on a desktop/mobile widget was clicked (root only; payload: [`EventPayload::Json`], [`crate::widget::WidgetActionEvent`]).",
 }
 
 /// What an input holds, for the system's autofill and suggestions
@@ -2866,6 +2867,9 @@ pub enum Command {
     /// Show a notification, ask for the permission, set the app's badge
     /// (on the root; `Notifications` of `nsh`, [`crate::notifications`]).
     Notification(crate::notifications::NotificationCommand),
+    /// Reload native widget timelines or listen for interactive widget actions
+    /// (on the root; `Widget` of `nsh/widget`, [`crate::widget`]).
+    Widget(crate::widget::WidgetCommand),
     /// Play a haptic (on the root; `Haptics` of `nsh/mobile`,
     /// [`crate::element::haptic`]). Platforms without haptics ignore it.
     Haptic(Haptic),
@@ -3753,6 +3757,15 @@ pub enum Prop {
     /// them ([`crate::selection`]). Set by components
     /// (`Element::continues_text`), never by JS.
     ContinuesText(bool),
+    /// `widget`: optional platform-neutral widget visual hints (`accentable`,
+    /// `accentedRenderingMode`, `containerBackground`) for elements rendered
+    /// inside desktop or mobile widgets (`nsh/widget`). Ignored in normal app
+    /// windows.
+    #[prop(js = "widget")]
+    WidgetHints(Option<crate::widget::WidgetHints>),
+    /// Internal widget metadata attached by `WidgetAction` and `WidgetDate`
+    /// components (`nsh/widget`), never set directly from JS.
+    WidgetMeta(Option<Box<crate::widget::WidgetNodeMeta>>),
     /// `allowFontScaling`: follow the system text size (default true).
     #[prop(js = "allowFontScaling", default = true, on = TEXT | INPUT)]
     AllowFontScaling(bool),

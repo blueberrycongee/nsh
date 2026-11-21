@@ -22,6 +22,7 @@ pub const NATIVE_MODULES: &[&str] = &[
     "nsh/i18n",
     "nsh/mobile",
     "nsh/web",
+    "nsh/widget",
 ];
 
 /// The exact gpui-shell standard catalog, using canonical bare specifiers.

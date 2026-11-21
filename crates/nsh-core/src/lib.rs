@@ -104,6 +104,7 @@ pub mod url_scheme;
 pub mod web_resource;
 pub mod websocket;
 pub mod webview;
+pub mod widget;
 
 // The derive macros name `::nsh_core`, also in this crate's own tests.
 extern crate self as nsh_core;

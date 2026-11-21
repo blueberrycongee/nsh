@@ -2227,6 +2227,21 @@ pub trait Interactive: Element {
         self
     }
 
+    /// Internal widget metadata attached by `WidgetAction` and `WidgetDate`
+    /// (`Prop::WidgetMeta`).
+    #[doc(hidden)]
+    fn __widget_meta(
+        mut self,
+        meta: impl IntoReactive<Option<crate::widget::WidgetNodeMeta>>,
+    ) -> Self {
+        super::host::bind_prop(
+            self.node(),
+            meta,
+            |meta: Option<crate::widget::WidgetNodeMeta>| Prop::WidgetMeta(meta.map(Box::new)),
+        );
+        self
+    }
+
     /// How long a press must last to be a long press, in milliseconds.
     fn long_press_delay(mut self, ms: f32) -> Self {
         super::host::set(self.node(), Prop::LongPressDelay(Some(ms)));

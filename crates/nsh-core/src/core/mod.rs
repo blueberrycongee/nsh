@@ -1299,6 +1299,9 @@ pub struct Core<M: TextEngine> {
     /// Final layouts kept for Rust components' `on_text_layout` until
     /// their `TextLayout` events are dispatched ([`keep_geometry`]).
     geometries: rustc_hash::FxHashMap<NodeId, crate::text::TextGeometry>,
+    /// Per-node widget hints and component metadata (empty for non-widget
+    /// surfaces so `Node` itself stays lean).
+    widget_nodes: rustc_hash::FxHashMap<NodeId, crate::widget::WidgetNodeMeta>,
     measure_cache: MeasureCache,
     /// Counts the commits of resizes ([`Core::mark_near_screen`]).
     resizing_commit: u32,
@@ -1701,6 +1704,7 @@ impl<M: TextEngine> Core<M> {
             text_engine: Rc::new(text_engine),
             geometry_engine: None,
             geometries: Default::default(),
+            widget_nodes: Default::default(),
             measure_cache: MeasureCache::default(),
             resizing_commit: 0,
             resize_settling: false,
@@ -6408,6 +6412,32 @@ impl<M: TextEngine> Core<M> {
                     flags |= dirty::VIEW_PROPS;
                 }
             }
+            Prop::WidgetHints(hints) => {
+                if let Some(hints) = hints {
+                    self.widget_nodes.entry(id).or_default().hints = Some(hints);
+                } else if let Some(entry) = self.widget_nodes.get_mut(&id) {
+                    entry.hints = None;
+                    if entry.action.is_none() && entry.date.is_none() {
+                        self.widget_nodes.remove(&id);
+                    }
+                }
+            }
+            Prop::WidgetMeta(meta) => {
+                if let Some(meta) = meta {
+                    let entry = self.widget_nodes.entry(id).or_default();
+                    if meta.hints.is_some() {
+                        entry.hints = meta.hints;
+                    }
+                    entry.action = meta.action;
+                    entry.date = meta.date;
+                } else if let Some(entry) = self.widget_nodes.get_mut(&id) {
+                    entry.action = None;
+                    entry.date = None;
+                    if entry.hints.is_none() {
+                        self.widget_nodes.remove(&id);
+                    }
+                }
+            }
             Prop::Accessibility(prop) => {
                 // A label changing on mounted props goes alone: it is
                 // the one that follows app state (a count, a value).
@@ -7329,6 +7359,7 @@ impl<M: TextEngine> Core<M> {
         let node = self.nodes.remove(key as usize);
         self.ch_readers -= usize::from(node.reads_ch);
         self.slots.remove(id as usize);
+        self.widget_nodes.remove(&id);
         if node.class_props.as_ref().and_then(|c| c.pointer_events)
             == Some(crate::props::PointerEvents::None)
         {

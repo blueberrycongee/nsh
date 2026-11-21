@@ -491,6 +491,13 @@ pub(crate) const MODULES: &[NativeModule] = &[
         types: decl!(crate::web_page::TYPES),
     },
     NativeModule {
+        name: "nsh/widget",
+        exports: WIDGET_EXPORTS,
+        also: &[],
+        moved_to: None,
+        types: decl!(WIDGET_TYPES),
+    },
+    NativeModule {
         name: "nsh/webview",
         exports: platform_modules::WEBVIEW_EXPORTS,
         also: &[],
@@ -561,6 +568,112 @@ pub(crate) const MODULES: &[NativeModule] = &[
         types: decl!(keymap::TYPES),
     },
 ];
+
+/// `nsh/widget`'s `defineWidget`: validates that `definition.render` is a
+/// function and returns the definition object unchanged.
+unsafe extern "C" fn define_widget(
+    cx: *mut JsContext,
+    _this: JsValue,
+    argc: c_int,
+    argv: *mut JsValue,
+) -> JsValue {
+    // SAFETY: QuickJS passes `argc` live arguments in `argv`.
+    unsafe {
+        if argc < 1 {
+            return qjs::JS_ThrowTypeError(
+                cx,
+                c"defineWidget: expected a widget definition object".as_ptr(),
+            );
+        }
+        let def = *argv;
+        if !qjs::JS_IsObject(def) {
+            return qjs::JS_ThrowTypeError(
+                cx,
+                c"defineWidget: expected a widget definition object".as_ptr(),
+            );
+        }
+        let render = qjs::JS_GetPropertyStr(cx, def, c"render".as_ptr());
+        let ok = qjs::JS_IsFunction(cx, render);
+        qjs::JS_FreeValue(cx, render);
+        if !ok {
+            return qjs::JS_ThrowTypeError(
+                cx,
+                c"defineWidget: definition must provide a `render` function".as_ptr(),
+            );
+        }
+        qjs::JS_DupValue(cx, def)
+    }
+}
+
+/// `nsh/widget` JS-side exports (merged with `Registry::runtime("nsh/widget")`).
+const WIDGET_EXPORTS: &[Item] = &[(
+    "defineWidget",
+    Export::Function(define_widget, 1),
+    Ts::function(
+        "Registers the default widget definition for a widget entry module (`widgets/*.tsx`).",
+        &["<T = unknown>(definition: WidgetDefinition<T>): WidgetDefinition<T>"],
+    ),
+)];
+
+/// `nsh/widget` authoring TypeScript interfaces.
+const WIDGET_TYPES: &str = r#"/** WidgetKit rendering mode reported or simulated during preview. */
+export type WidgetRenderingMode = "fullColor" | "accented" | "vibrant";
+
+/** Policy controlling when the OS next asks for a widget timeline refresh. */
+export type WidgetReloadPolicy = "atEnd" | "never" | { after: number };
+
+/** Props passed to a widget's `render` and `url` functions. */
+export interface WidgetRenderProps<T = unknown> {
+  /** Current timeline entry data (`undefined` for placeholder or empty state). */
+  data: T | undefined;
+  /** Active widget size slot. */
+  family: WidgetFamily;
+  /** True when rendering the OS placeholder skeleton. */
+  isPlaceholder: boolean;
+  /** Entry display Unix timestamp in milliseconds. */
+  date: number;
+}
+
+/** Context passed to a widget definition's `onAction` handler. */
+export interface WidgetActionContext<T = unknown> {
+  widgetId: string;
+  action: string;
+  payload: unknown;
+  data: T | undefined;
+}
+
+/** Optional state update or deep link returned by `onAction`. */
+export interface WidgetActionResult<T = unknown> {
+  /** Updated widget data to re-render immediately in-place. */
+  data?: T;
+  /** Optional deep link URL to open in the main app. */
+  openUrl?: string;
+}
+
+/** Declarative widget definition exported as default from a widget TSX entry. */
+export interface WidgetDefinition<T = unknown> {
+  /** Pure TSX component rendered with NSH primitives, Tailwind, and theme tokens. */
+  render: (props: WidgetRenderProps<T>) => JSX.Element;
+  /** Optional default/placeholder data shown before the main app pushes data. */
+  placeholder?: T;
+  /** Optional root deep link URL when tapping anywhere outside Links/Actions. */
+  url?: (props: WidgetRenderProps<T>) => string | undefined;
+  /** Optional handler invoked when a `<WidgetAction>` button is clicked. */
+  onAction?: (
+    ctx: WidgetActionContext<T>,
+  ) => WidgetActionResult<T> | Promise<WidgetActionResult<T> | void> | void;
+  /** Optional timeline provider for autonomous background refreshes. */
+  getTimeline?: (ctx: {
+    widgetId: string;
+    family: WidgetFamily;
+    data: T | undefined;
+    now: number;
+  }) => Promise<{
+    entries: { date: number; data: T; relevance?: number }[];
+    reloadPolicy?: WidgetReloadPolicy;
+  }>;
+}
+"#;
 
 /// `nsh`'s `Image`: the image element as a component carrying the
 /// functions of the runtime's module (`getSize`, `prefetch`).

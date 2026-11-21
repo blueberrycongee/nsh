@@ -112,7 +112,42 @@ pub(crate) fn check(entry: &Path, tsc: Option<&Path>, args: &[String]) -> anyhow
     if !status.success() {
         bail!("type check failed ({status})");
     }
+    check_widgets(entry)?;
     log::info!("no type errors in {}", dir.display());
+    Ok(())
+}
+
+/// Validates all widget TSX entries declared in `nsh.json` `"widgets"` using
+/// `nsh-bundler`'s static widget AST allow-list checker.
+pub(crate) fn check_widgets(entry: &Path) -> anyhow::Result<()> {
+    let config = crate::package::read_config(entry)?;
+    if config.widgets.is_empty() {
+        return Ok(());
+    }
+    let dir = dunce::canonicalize(entry)?
+        .parent()
+        .context("entry has no directory")?
+        .to_path_buf();
+    let mut errors = Vec::new();
+    for widget in &config.widgets {
+        let widget_path = dir.join(&widget.entry);
+        if !widget_path.is_file() {
+            bail!(
+                "nsh.json widgets ({}): entry `{}` does not exist at {}",
+                widget.id,
+                widget.entry,
+                widget_path.display()
+            );
+        }
+        let diagnostics = nsh_bundler::check_widget_file(&widget_path, widget.network)
+            .with_context(|| format!("read widget entry {}", widget_path.display()))?;
+        for diag in diagnostics {
+            errors.push(format!("{}:{diag}", widget.entry));
+        }
+    }
+    if !errors.is_empty() {
+        bail!("widget check failed:\n  {}", errors.join("\n  "));
+    }
     Ok(())
 }
 

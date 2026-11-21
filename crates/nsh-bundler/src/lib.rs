@@ -27,6 +27,7 @@ mod props;
 mod split;
 #[cfg(feature = "bundle")]
 mod types;
+pub mod widget_check;
 
 #[cfg(feature = "bundle")]
 pub use bundle::*;
@@ -38,6 +39,7 @@ pub use minify::minify_module;
 pub use natives::{Imported, NativeUse};
 #[cfg(feature = "bundle")]
 pub use types::{TSCONFIG, TSCONFIG_BASE, tokens_declaration, type_definitions};
+pub use widget_check::{WidgetDiagnostic, check_widget_file, check_widget_source};
 
 /// Compiles one module (TSX, JSX, TS or JS, as `name`'s extension says) to
 /// the ES module the runtime runs: TypeScript removed, JSX compiled, imports

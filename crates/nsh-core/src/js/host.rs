@@ -1140,6 +1140,7 @@ pub const INTERNAL_EVENTS: &[EventKind] = &[
     EventKind::Dismiss,
     EventKind::RequestClose,
     EventKind::Show,
+    EventKind::WidgetAction,
 ];
 
 /// The interfaces of the host props, by the elements their props apply

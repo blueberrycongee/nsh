@@ -1135,6 +1135,14 @@ pub fn next_second_instance() -> Answer<crate::single_instance::SecondInstance> 
     answer
 }
 
+/// The next interactive action triggered from a native widget
+/// (TS: `Widget.on("action", ...)`). Queued actions are delivered first.
+pub fn next_widget_action() -> Answer<crate::widget::WidgetActionEvent> {
+    let (answer, slot) = Answer::new();
+    act(Action::NextWidgetAction(slot));
+    answer
+}
+
 /// The next link that opens the app (TS: `UrlScheme.on("open", ...)`): a
 /// URL of a scheme the app claims (`nsh.json` `schemes`), those
 /// that came before anything listened first, the one that launched the app

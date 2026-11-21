@@ -59,6 +59,7 @@ pub(crate) struct Shared {
     pub(crate) system_filesystem:
         RefCell<Option<std::sync::Arc<dyn nsh_core::filesystem::FileSystem>>>,
     pub(crate) system_updater: RefCell<Option<std::sync::Arc<dyn nsh_core::runtime::UpdaterHost>>>,
+    pub(crate) system_widget: RefCell<Option<std::sync::Arc<dyn nsh_core::widget::WidgetHost>>>,
     /// The core's address (`UrlScheme.url()`).
     pub(crate) system_app_url: RefCell<nsh_core::url_scheme::AppUrlCell>,
     pub(crate) system_data_dir: RefCell<Option<std::path::PathBuf>>,
@@ -725,6 +726,11 @@ impl Host {
     /// Installs what `nsh/updater` runs on.
     pub fn set_updater(&self, updater: Option<std::sync::Arc<dyn nsh_core::runtime::UpdaterHost>>) {
         *self.shared.system_updater.borrow_mut() = updater;
+    }
+
+    /// Installs what `nsh/widget` runs on.
+    pub fn set_widget(&self, widget: Option<std::sync::Arc<dyn nsh_core::widget::WidgetHost>>) {
+        *self.shared.system_widget.borrow_mut() = widget;
     }
 
     /// Shares the core's address with the VM's modules (`UrlScheme.url()`).

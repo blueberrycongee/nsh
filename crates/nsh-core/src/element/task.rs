@@ -177,6 +177,9 @@ pub(crate) enum Action {
     /// ([`crate::single_instance::SecondInstance`]) resolves the slot, those
     /// that came before first.
     NextSecondInstance(AnswerSlot<crate::single_instance::SecondInstance>),
+    /// The next interactive widget action ([`crate::widget::WidgetActionEvent`])
+    /// resolves the slot, queued offline actions first.
+    NextWidgetAction(AnswerSlot<crate::widget::WidgetActionEvent>),
     /// The next address move the app did not make
     /// ([`crate::url_scheme::AppUrlChange`]) resolves the slot.
     NextAppUrlChange(AnswerSlot<crate::url_scheme::AppUrlChange>),

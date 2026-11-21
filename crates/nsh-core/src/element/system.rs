@@ -62,6 +62,8 @@ pub struct System {
     pub refuse_connections: Option<RefuseConnections>,
     /// What `nsh/updater` runs on; `None`: the app does not update.
     pub updater: Option<Arc<dyn crate::runtime::UpdaterHost>>,
+    /// What `nsh/widget` runs on; `None`: native widgets are unavailable.
+    pub widget: Option<Arc<dyn crate::widget::WidgetHost>>,
     /// The app's address, the core's own (`UrlScheme.url()`,
     /// [`Core::app_url_cell`](crate::Core::app_url_cell)).
     #[doc(hidden)]
@@ -98,6 +100,7 @@ impl System {
             clipboard_images: None,
             refuse_connections: None,
             updater: None,
+            widget: None,
             app_url: Default::default(),
             base_url: None,
         }
@@ -134,6 +137,12 @@ impl System {
     /// Sets what `nsh/updater` runs on.
     pub fn with_updater(mut self, updater: Option<Arc<dyn crate::runtime::UpdaterHost>>) -> Self {
         self.updater = updater;
+        self
+    }
+
+    /// Sets what `nsh/widget` runs on.
+    pub fn with_widget(mut self, widget: Option<Arc<dyn crate::widget::WidgetHost>>) -> Self {
+        self.widget = widget;
         self
     }
 

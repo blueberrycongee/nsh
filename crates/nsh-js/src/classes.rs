@@ -1211,6 +1211,7 @@ impl JsHost for CallHost<'_> {
         .with_refuse_connections(shared.system_refuse_connections.borrow().clone())
         .with_filesystem(shared.system_filesystem.borrow().clone())
         .with_updater(shared.system_updater.borrow().clone())
+        .with_widget(shared.system_widget.borrow().clone())
         .with_app_url(shared.system_app_url.borrow().clone())
         // What `fetch`'s relative URLs resolve against, media's `//` too.
         .with_base_url(
