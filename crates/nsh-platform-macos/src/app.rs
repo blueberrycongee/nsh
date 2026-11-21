@@ -255,6 +255,12 @@ pub struct AppOptions {
     /// `widgets/` directory). `None` disables widget integration with zero
     /// runtime overhead.
     pub widgets: Option<PathBuf>,
+    /// Optional shipped `widgets/` directory whose signed App Group identifier
+    /// should be preserved when [`Self::widgets`] points to an OTA `.nshpkg`.
+    pub shipped_widgets: Option<PathBuf>,
+    /// When `true`, re-evaluates and reloads all widgets from persisted data on
+    /// startup (used after an OTA `.nshpkg` update activates).
+    pub resync_widgets: bool,
 }
 
 impl Default for AppOptions {
@@ -285,6 +291,8 @@ impl Default for AppOptions {
             transparent: false,
             handoff: false,
             widgets: None,
+            shipped_widgets: None,
+            resync_widgets: false,
         }
     }
 }
@@ -464,10 +472,19 @@ impl AppView {
         let options = self.options.borrow();
         let sets = ui_sets();
         let host_tokens = self.surface.host_tokens.borrow().clone();
-        let loaded_widgets = options
-            .widgets
+        let app_group_override = options
+            .shipped_widgets
             .as_deref()
-            .and_then(|dir| crate::widget::load_from_dir(dir, sets.clone(), host_tokens.clone()));
+            .and_then(crate::widget::read_app_group);
+        let loaded_widgets = options.widgets.as_deref().and_then(|dir| {
+            crate::widget::load_from_dir(
+                dir,
+                app_group_override.as_deref(),
+                sets.clone(),
+                host_tokens.clone(),
+            )
+        });
+        let resync_widgets = options.resync_widgets;
         let widget_host = loaded_widgets
             .as_ref()
             .map(|w| w.host.clone() as Arc<dyn nsh_core::widget::WidgetHost>);
@@ -524,7 +541,8 @@ impl AppView {
         self.surface.native.set_app(&config.app);
         crate::native::warm_web_later(&self.surface);
         self.surface.start(config);
-        // Drain any offline widget actions queued while the app was closed.
+        // Drain any offline widget actions queued while the app was closed,
+        // and resync persisted snapshots if an OTA update just activated.
         if let Some(loaded) = loaded_widgets {
             use nsh_core::widget::WidgetHost as _;
             for event in loaded.host.drain_pending_actions() {
@@ -535,6 +553,14 @@ impl AppView {
                         nsh_core::EventPayload::Json(json),
                     );
                 }
+            }
+            if resync_widgets {
+                let host = loaded.host.clone();
+                std::thread::spawn(move || {
+                    if let Err(err) = host.resync_all() {
+                        log::warn!("widgets: OTA resync error: {err}");
+                    }
+                });
             }
         }
     }

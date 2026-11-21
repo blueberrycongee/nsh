@@ -9,8 +9,8 @@ use std::{
 
 use anyhow::{Context as _, bail};
 use nsh_package::{
-    App, Certificate, Contents, PublicKey, Revocations, SecretKey, TrustStore, build, certify,
-    revoke, verify_signature,
+    App, Certificate, Contents, PublicKey, Revocations, SecretKey, TrustStore, WidgetFile, build,
+    build_with_widgets, certify, revoke, verify_signature,
 };
 
 fn read_secret(path: &Path) -> anyhow::Result<SecretKey> {
@@ -184,7 +184,34 @@ pub(crate) fn publish(options: PublishOptions<'_>) -> anyhow::Result<()> {
         assets,
         min_runtime: config.min_runtime.clone(),
     };
-    let bytes = build(&contents, &key, &cert)?;
+    let mut widget_files = Vec::new();
+    if !config.widgets.is_empty() {
+        let app_dir = entry.parent().unwrap_or(Path::new("."));
+        let compiled = crate::macos_widgets::compile_widgets(app_dir, config)?;
+        let (app_group, _) = crate::macos_widgets::resolve_app_group(&id, config, "-");
+        let mut entries = Vec::with_capacity(compiled.len());
+        for w in compiled {
+            let code_file = format!("{}.js", w.config.id);
+            widget_files.push(WidgetFile::source(
+                format!("widgets/{code_file}"),
+                w.code.into_bytes(),
+            ));
+            entries.push(crate::macos_widgets::WidgetManifestEntry {
+                config: w.config,
+                code_file,
+            });
+        }
+        let manifest = crate::macos_widgets::WidgetManifest {
+            app_group,
+            widgets: entries,
+        };
+        widget_files.insert(0, WidgetFile::manifest(serde_json::to_vec(&manifest)?));
+    }
+    let bytes = if widget_files.is_empty() {
+        build(&contents, &key, &cert)?
+    } else {
+        build_with_widgets(&contents, &widget_files, &key, &cert)?
+    };
     let out = options
         .out
         .unwrap_or_else(|| default_out(&id, build_number));

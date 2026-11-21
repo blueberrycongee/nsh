@@ -149,11 +149,22 @@ pub(crate) struct LoadedWidgets {
     pub(crate) app_group: String,
 }
 
+/// Reads only the `appGroup` identifier from `widgets_dir/manifest.json`, if present.
+pub(crate) fn read_app_group(widgets_dir: &Path) -> Option<String> {
+    let raw = fs::read_to_string(widgets_dir.join("manifest.json")).ok()?;
+    let manifest: WidgetManifest = serde_json::from_str(&raw).ok()?;
+    (!manifest.app_group.is_empty()).then_some(manifest.app_group)
+}
+
 /// Loads compiled widgets from `widgets_dir` (`<Resources>/nsh/widgets` or an
-/// extracted OTA package's `widgets/` directory). Returns `None` immediately
-/// when no `manifest.json` is present (zero overhead for apps without widgets).
+/// extracted OTA package's `widgets/` directory). When `app_group_override` is
+/// supplied (e.g. the shipped bundle's signed App Group during an OTA update),
+/// it takes precedence over the manifest's `appGroup`. Returns `None`
+/// immediately when no `manifest.json` is present (zero overhead for apps
+/// without widgets).
 pub(crate) fn load_from_dir(
     widgets_dir: &Path,
+    app_group_override: Option<&str>,
     ui_sets: Vec<Registry>,
     tokens: Option<Tokens>,
 ) -> Option<LoadedWidgets> {
@@ -168,13 +179,16 @@ pub(crate) fn load_from_dir(
             return None;
         }
     };
-    let manifest: WidgetManifest = match serde_json::from_str(&raw) {
+    let mut manifest: WidgetManifest = match serde_json::from_str(&raw) {
         Ok(manifest) => manifest,
         Err(err) => {
             log::warn!("widgets: invalid {}: {err}", manifest_path.display());
             return None;
         }
     };
+    if let Some(group) = app_group_override.filter(|g| !g.is_empty()) {
+        manifest.app_group = group.to_owned();
+    }
     if manifest.widgets.is_empty() {
         return None;
     }

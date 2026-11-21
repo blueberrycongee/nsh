@@ -627,6 +627,9 @@ pub struct LoadedPackage {
     pub bundle: Bundle,
     /// Where its assets are (`asset:/…`).
     pub assets: std::path::PathBuf,
+    /// Where its extracted compiled widgets are (`manifest.json` + `<id>.js`),
+    /// if the package ships widgets.
+    pub widgets: Option<std::path::PathBuf>,
     /// Its app.
     pub app: nsh_package::App,
     /// What accepting it records ([`accept_package`]).
@@ -677,12 +680,32 @@ pub fn verify_package(
             }
             std::fs::write(&dest, data).map_err(|e| format!("{}: {e}", dest.display()))?;
         }
+        if let Some(manifest) = &package.widget_manifest {
+            let widgets_dir = dir.join("widgets");
+            std::fs::create_dir_all(&widgets_dir).map_err(|e| e.to_string())?;
+            std::fs::write(widgets_dir.join("manifest.json"), manifest)
+                .map_err(|e| format!("write widgets/manifest.json: {e}"))?;
+            for (path, data) in &package.widget_sources {
+                let rel = path.strip_prefix("widgets/").unwrap_or(path);
+                let dest = widgets_dir.join(rel);
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+                std::fs::write(&dest, data).map_err(|e| format!("{}: {e}", dest.display()))?;
+            }
+        }
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
         std::fs::write(&done, b"").map_err(|e| e.to_string())?;
     }
+    let widgets_dir = dir.join("widgets");
+    let widgets = widgets_dir
+        .join("manifest.json")
+        .is_file()
+        .then_some(widgets_dir);
     Ok(LoadedPackage {
         bundle,
         assets: dir.join("assets"),
+        widgets,
         receipt: package.receipt(),
         app: package.app,
     })

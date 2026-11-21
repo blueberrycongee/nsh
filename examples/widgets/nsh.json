@@ -1,0 +1,20 @@
+{
+  "name": "Pulse",
+  "id": "com.example.pulse",
+  "version": "1.0.0",
+  "build": 1,
+  "schemes": ["pulse"],
+  "window": {
+    "title": "Pulse Widgets"
+  },
+  "widgets": [
+    {
+      "id": "portfolio",
+      "entry": "widgets/PortfolioWidget.tsx",
+      "name": "Portfolio",
+      "description": "Watchlist price, daily change, and goal progress at a glance.",
+      "families": ["small", "medium", "large"],
+      "refreshInterval": "15m"
+    }
+  ]
+}

@@ -289,8 +289,7 @@ nsh package --target macos --run
 ```
 
 写出 `.nsh/out/<Name>.app`：可执行文件位于 `Contents/MacOS/`，`nsh/assets/…`、`nsh/app.json`（窗口标题、应用的外观、激活策略和 nsh.json 中的窗口设置）以及
-TSX 应用的 `nsh/bundle.nshc` 位于 `Contents/Resources/`。应用使用 ad hoc 签名，要求 macOS 14 及以上，或应用指定的更高版本（见[最低系统版本](#最低系统版本)）；
-要分发它，请用 Developer ID 签名并进行公证。见
+TSX 应用的 `nsh/bundle.nshc` 位于 `Contents/Resources/`。传入 `--sign <identity>` 可使用 Developer ID 与 Hardened Runtime 签名（带时间戳并执行 `codesign --verify --deep --strict` 校验），省略时使用本地 ad hoc 签名。在 `nsh.json` 中声明 `"widgets"` 时会自动编译、嵌入并签名 `Contents/PlugIns/<Name>Widgets.appex` 及沙盒与 App Group 权限（见 [桌面小组件](./widgets.md)）；`macos.extensions` 也可像 `ios.extensions` 一样嵌入预构建的 macOS `.appex` 扩展。应用要求 macOS 14 及以上，或应用指定的更高版本（见[最低系统版本](#最低系统版本)）。见
 [macOS](./macos.md#打包)。
 
 应用运行在本机的处理器上。`--arch` 可以换成别的：`x86_64` 面向 Intel Mac，`arm64` 面向 Apple 芯片，`universal` 把两者合在一个可执行文件里。为另一种处理器编 runner

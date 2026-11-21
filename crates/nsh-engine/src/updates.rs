@@ -69,6 +69,10 @@ pub struct Launch {
     /// Where its assets are: the package's when it runs one, else the
     /// shipped `assets` directory.
     pub assets: PathBuf,
+    /// Where its compiled widgets are (`manifest.json` + `<id>.js`): the OTA
+    /// package's when it includes updated widgets, else the shipped `widgets`
+    /// directory if present.
+    pub widgets: Option<PathBuf>,
     /// The package it runs (`None`: the shipped bundle).
     pub package: Option<nsh_package::App>,
 }
@@ -82,17 +86,24 @@ pub struct Launch {
 /// logged and the shipped bundle runs.
 pub fn launch(shipped: Bundle, resources: &Path, support_dir: Option<&Path>) -> Launch {
     let assets = resources.join("assets");
+    let shipped_widgets = resources.join("widgets");
+    let shipped_widgets = shipped_widgets
+        .join("manifest.json")
+        .is_file()
+        .then_some(shipped_widgets);
     let config = std::fs::read(assets.join(nsh_updater::CONFIG_ASSET)).ok();
     let mut shipped = shipped;
     match package_to_run(&mut shipped, config, support_dir) {
         Some(run) => Launch {
             bundle: run.bundle,
             assets: run.assets,
+            widgets: run.widgets.or(shipped_widgets),
             package: Some(run.app),
         },
         None => Launch {
             bundle: shipped,
             assets,
+            widgets: shipped_widgets,
             package: None,
         },
     }
@@ -106,6 +117,8 @@ pub struct PackageRun {
     pub bundle: Bundle,
     /// Where its assets are.
     pub assets: PathBuf,
+    /// Where its extracted widgets are, if included in the package.
+    pub widgets: Option<PathBuf>,
     /// Its app.
     pub app: nsh_package::App,
 }
@@ -137,6 +150,7 @@ pub fn package_to_run(
     );
     Some(PackageRun {
         assets: chosen.loaded.assets.clone(),
+        widgets: chosen.loaded.widgets.clone(),
         bundle: as_shipped(chosen.loaded.bundle, shipped, chosen.trial),
         app,
     })

@@ -86,8 +86,8 @@ mod trust;
 pub use crate::{
     keys::{PublicKey, SecretKey},
     package::{
-        App, Contents, FileKind, Header, PackageReceipt, VerifiedPackage, build, resign,
-        source_map, verify_signature,
+        App, Contents, FileKind, Header, PackageReceipt, VerifiedPackage, WidgetFile, build,
+        build_with_widgets, resign, source_map, verify_signature,
     },
     trust::{Certificate, Revocations, TrustStore, certify, revoke},
 };

@@ -30,8 +30,10 @@ pub fn main() -> std::process::ExitCode {
     options.asset_base = Some(AssetBase::Directory(launch.assets));
     let shipped_widgets = dir.join("widgets");
     if shipped_widgets.join("manifest.json").is_file() {
-        options.widgets = Some(shipped_widgets);
+        options.shipped_widgets = Some(shipped_widgets);
     }
+    options.widgets = launch.widgets;
+    options.resync_widgets = launch.package.is_some() && options.widgets.is_some();
     run_app(AppSource::Bundle(launch.bundle), options)
 }
 

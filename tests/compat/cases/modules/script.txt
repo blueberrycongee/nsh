@@ -388,3 +388,15 @@ tap id:case-mod-perf-stats
 # no stats until the monitor measured a second.
 expect Fps: none
 covers [nsh] perfStats
+# mod-widget
+tap id:case-mod-widget
+expect Widget available: false
+expect Widget define: true
+expect Widget unsub: true
+expect Widget update: ERR_FEATURE_UNAVAILABLE_ON_PLATFORM
+expect Widget getData: null
+expect Widget action child
+covers [nsh/widget] Widget
+covers [nsh/widget] defineWidget
+covers [nsh/widget] WidgetAction
+covers [nsh/widget] WidgetDate

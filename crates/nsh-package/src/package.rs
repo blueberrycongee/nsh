@@ -45,6 +45,53 @@ pub enum FileKind {
     SourceMap,
     /// An asset (`asset:/<path>`).
     Asset,
+    /// Widget manifest (`widgets/manifest.json`).
+    WidgetManifest,
+    /// Compiled widget JS source (`widgets/<id>.js`).
+    WidgetSource,
+    /// Compiled widget QuickJS bytecode (`widgets/<id>.nshc`).
+    WidgetBytecode,
+}
+
+/// One widget payload file included inside a signed `.nshpkg` package.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct WidgetFile {
+    /// Relative path inside the package (e.g. `"widgets/manifest.json"`, `"widgets/portfolio.js"`).
+    pub path: String,
+    /// File kind (`WidgetManifest`, `WidgetSource`, or `WidgetBytecode`).
+    pub kind: FileKind,
+    /// Raw file bytes.
+    pub bytes: Vec<u8>,
+}
+
+impl WidgetFile {
+    /// Creates a `widgets/manifest.json` entry.
+    pub fn manifest(bytes: Vec<u8>) -> Self {
+        Self {
+            path: "widgets/manifest.json".into(),
+            kind: FileKind::WidgetManifest,
+            bytes,
+        }
+    }
+
+    /// Creates a compiled widget JS source entry (`widgets/<file_name>`).
+    pub fn source(path: impl Into<String>, bytes: Vec<u8>) -> Self {
+        Self {
+            path: path.into(),
+            kind: FileKind::WidgetSource,
+            bytes,
+        }
+    }
+
+    /// Creates a compiled widget bytecode entry (`widgets/<file_name>`).
+    pub fn bytecode(path: impl Into<String>, bytes: Vec<u8>) -> Self {
+        Self {
+            path: path.into(),
+            kind: FileKind::WidgetBytecode,
+            bytes,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -179,6 +226,20 @@ pub fn build(
     key: &SecretKey,
     certificate: &Certificate,
 ) -> Result<Vec<u8>, Error> {
+    build_with_widgets(contents, &[], key, certificate)
+}
+
+/// Builds a signed package including optional compiled widget files
+/// (`WidgetManifest`, `WidgetSource`, `WidgetBytecode`).
+///
+/// Format version stays `1`: older runtimes ignore unknown `FileKind` entries
+/// while still verifying the package signature and file hashes.
+pub fn build_with_widgets(
+    contents: &Contents,
+    widgets: &[WidgetFile],
+    key: &SecretKey,
+    certificate: &Certificate,
+) -> Result<Vec<u8>, Error> {
     let claimed = certificate.claimed()?;
     if claimed.key != key.public() {
         return Err(Error::Certificate("it certifies another key".into()));
@@ -190,7 +251,7 @@ pub fn build(
     if let Some(min) = &contents.min_runtime {
         crate::check_min_runtime(min).map_err(Error::Format)?;
     }
-    assemble(contents, key, certificate, created_at)
+    assemble_with_widgets(contents, widgets, key, certificate, created_at)
 }
 
 /// Signs a package again with `key`, which `certificate` certifies (it must
@@ -244,8 +305,19 @@ pub fn resign(bytes: &[u8], key: &SecretKey, certificate: &Certificate) -> Resul
 }
 
 /// The package bytes, signed by `key`, without checking the certificate.
+#[cfg(test)]
 fn assemble(
     contents: &Contents,
+    key: &SecretKey,
+    certificate: &Certificate,
+    created_at: u64,
+) -> Result<Vec<u8>, Error> {
+    assemble_with_widgets(contents, &[], key, certificate, created_at)
+}
+
+fn assemble_with_widgets(
+    contents: &Contents,
+    widgets: &[WidgetFile],
     key: &SecretKey,
     certificate: &Certificate,
     created_at: u64,
@@ -266,6 +338,10 @@ fn assemble(
     for (path, bytes) in &contents.assets {
         check_path(path)?;
         blobs.push((path.clone(), FileKind::Asset, bytes));
+    }
+    for widget in widgets {
+        check_path(&widget.path)?;
+        blobs.push((widget.path.clone(), widget.kind, &widget.bytes));
     }
     let mut files = Vec::with_capacity(blobs.len());
     let mut offset = 0u64;
@@ -327,6 +403,12 @@ pub struct VerifiedPackage {
     pub source_map: Option<String>,
     /// Assets: path and bytes.
     pub assets: Vec<(String, Vec<u8>)>,
+    /// Widget manifest (`widgets/manifest.json`), when the package includes widgets.
+    pub widget_manifest: Option<Vec<u8>>,
+    /// Compiled widget JS sources (`(path, bytes)`).
+    pub widget_sources: Vec<(String, Vec<u8>)>,
+    /// Compiled widget bytecode for this runtime (`(path, bytes)`).
+    pub widget_bytecode: Vec<(String, Vec<u8>)>,
     /// SHA-256 of the whole package (hex): its identity for revocation.
     pub sha256: String,
     /// The release key's id.
@@ -524,6 +606,9 @@ pub(crate) fn open(
         bytecode: None,
         source_map: None,
         assets: Vec::new(),
+        widget_manifest: None,
+        widget_sources: Vec::new(),
+        widget_bytecode: Vec::new(),
         sha256: hex(&Sha256::digest(bytes)),
         key_id,
         created_at: header.created_at,
@@ -556,6 +641,23 @@ pub(crate) fn open(
                 check_path(&file.path)?;
                 package.assets.push((file.path.clone(), data.to_vec()));
             }
+            FileKind::WidgetManifest => {
+                check_path(&file.path)?;
+                package.widget_manifest = Some(data.to_vec());
+            }
+            FileKind::WidgetSource => {
+                check_path(&file.path)?;
+                package
+                    .widget_sources
+                    .push((file.path.clone(), data.to_vec()));
+            }
+            FileKind::WidgetBytecode if header.bytecode_version == bytecode_version => {
+                check_path(&file.path)?;
+                package
+                    .widget_bytecode
+                    .push((file.path.clone(), data.to_vec()));
+            }
+            FileKind::WidgetBytecode => {}
         }
     }
     if !seen_source {
@@ -963,5 +1065,25 @@ mod tests {
             header["critical"] = serde_json::json!(["minRuntime"]);
         });
         assert!(store.verify(&bytes, "v").is_ok());
+    }
+
+    #[test]
+    fn widget_files_round_trip_and_preserve_format_v1() {
+        let (key, cert, store) = signer();
+        let manifest = br#"{"appGroup":"T.com.example.demo.widgets","widgets":[]}"#.to_vec();
+        let source = b"export default { render() {} };".to_vec();
+        let widgets = vec![
+            WidgetFile::manifest(manifest.clone()),
+            WidgetFile::source("widgets/portfolio.js", source.clone()),
+        ];
+        let bytes =
+            build_with_widgets(&contents("com.example.demo"), &widgets, &key, &cert).unwrap();
+        let verified = store.verify(&bytes, "v").unwrap();
+        assert_eq!(verified.widget_manifest, Some(manifest));
+        assert_eq!(
+            verified.widget_sources,
+            vec![("widgets/portfolio.js".to_owned(), source)]
+        );
+        assert!(verified.ignored.is_empty());
     }
 }

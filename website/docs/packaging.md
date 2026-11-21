@@ -318,9 +318,12 @@ nsh package --target macos --run
 
 Writes `.nsh/out/<Name>.app`: the executable in `Contents/MacOS/`, and `nsh/assets/…`, `nsh/app.json` (the window
 title, the app's appearance, its activation policy and nsh.json's window options) and a TSX app's `nsh/bundle.nshc` in
-`Contents/Resources/`. The app is signed ad hoc and needs macOS 14 or
-later, or the later version it names ([Minimum system version](#minimum-system-version)); to distribute it, sign it
-with a Developer ID and notarize it. See [macOS](./macos.md#packaging).
+`Contents/Resources/`. Pass `--sign <identity>` to sign with your Developer ID and Hardened Runtime (with secure
+timestamps and `codesign --verify --deep --strict`), or omit it for local ad-hoc signing. Apps declaring `"widgets"` in
+`nsh.json` automatically embed and sign `Contents/PlugIns/<Name>Widgets.appex` with sandbox and App Group entitlements
+(see [Widgets](./widgets.md)); `macos.extensions` embeds prebuilt macOS `.appex` bundles the same way as
+`ios.extensions`. The app needs macOS 14 or later, or the later version it names
+([Minimum system version](#minimum-system-version)). See [macOS](./macos.md#packaging).
 
 The app runs on this Mac's processor. `--arch` picks another: `x86_64` for Intel Macs, `arm64` for Apple silicon, or
 `universal` for both in one executable. A runner for another processor needs its Rust target:

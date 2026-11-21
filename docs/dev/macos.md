@@ -89,6 +89,13 @@ screen effects. Animated nested shaders still require the existing CPU picture a
 `AXRow`, and `Cell` and `ColumnHeader` views expose `AXCell`. Press handlers keep their `AXPress` action without
 changing a declared role. Labels and the text children of rows and cells keep their existing behavior.
 
+## Desktop & Notification Center widgets
+
+`crates/nsh-platform-macos/build.rs` compiles `swift/NshWidgetHostBridge.swift` on macOS to bridge `WidgetCenter.shared`
+timeline reloads and App Group container resolution (`src/widget.rs`). `swift/widget/` holds `NshWidgetRuntime`, the
+generic SwiftUI WidgetKit renderer prebuilt into `dist/nsh/runtime/macos/widget/` by `cargo xtask dist` and linked by
+`nsh package --target macos` when an app declares `"widgets"` in `nsh.json`. See [widgets.md](widgets.md).
+
 `access/table.rs` derives the rows, columns, visible rows and cells, selected rows, headers and cell lookup from
 the mounted hierarchy when an accessibility client asks. It walks through row groups and layout wrappers, stops
 at nested tables, and respects hidden or folded content. Each row's `AXIndex` and each cell's row and column

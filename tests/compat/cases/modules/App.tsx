@@ -30,6 +30,7 @@ import ModSpeech from "./mod-speech";
 import ModStorage from "./mod-storage";
 import ModWeb from "./mod-web";
 import ModUpdater from "./mod-updater";
+import ModWidget from "./mod-widget";
 
 const cases: Record<string, () => JSX.Element> = {
   "mod-standard-access": ModStandardAccess,
@@ -58,6 +59,7 @@ const cases: Record<string, () => JSX.Element> = {
   "mod-storage": ModStorage,
   "mod-web": ModWeb,
   "mod-updater": ModUpdater,
+  "mod-widget": ModWidget,
 };
 const shown = signal("");
 

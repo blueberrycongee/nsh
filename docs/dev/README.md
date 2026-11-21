@@ -32,6 +32,7 @@ For people working on NSH itself (`AGENTS.md` at the root is the short version a
 | [embedding.md](embedding.md) | `nsh package`, the iOS / Android SDKs, native components |
 | [tooling.md](tooling.md) | `.nsh/types`, the dev server, hot reload, symbolication |
 | [macos.md](macos.md) | The macOS backend (AppKit): building, how each area maps to AppKit, `nsh test --target macos`, what differs |
+| [widgets.md](widgets.md) | Native widgets (`nsh/widget`): dual-appearance Widget Tree IR, headless evaluator, macOS WidgetKit runtime, zero-Xcode `.appex` packaging, OTA boundaries |
 | [linux.md](linux.md) | The Linux backend (GTK 4): building, how each area maps to GTK, `nsh test --target linux`, what differs |
 | [windows.md](windows.md) | The Windows backend (Win32, Direct2D): building, how each area maps to Windows, `nsh test --target windows`, what differs |
 | [gpui.md](gpui.md) | The GPUI backend (macOS, Windows, Linux): building, the surface element and `DrawCx`, embedding as a GPUI view, what differs |
