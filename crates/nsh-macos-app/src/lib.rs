@@ -28,6 +28,10 @@ pub fn main() -> std::process::ExitCode {
     let support_dir = nsh_engine::support_dir();
     let launch = nsh_engine::updates::launch(bundle, &dir, support_dir.as_deref());
     options.asset_base = Some(AssetBase::Directory(launch.assets));
+    let shipped_widgets = dir.join("widgets");
+    if shipped_widgets.join("manifest.json").is_file() {
+        options.widgets = Some(shipped_widgets);
+    }
     run_app(AppSource::Bundle(launch.bundle), options)
 }
 

@@ -94,6 +94,7 @@ pub(crate) fn dist() -> anyhow::Result<()> {
                 &out.join("runtime/macos").join(package),
             )?;
         }
+        macos_widget_runtime(&root, &out.join("runtime/macos/widget"))?;
     }
     if cfg!(target_os = "linux") {
         // Web views need WebKitGTK 6.0 to build (and then to run packaged
@@ -555,6 +556,56 @@ fn copy_executable(from: &Path, to: &Path) -> anyhow::Result<()> {
     } else if cfg!(target_os = "linux") {
         term::run(Command::new("strip").arg("--strip-all").arg(to))?;
     }
+    Ok(())
+}
+
+/// Precompiles the macOS SwiftUI WidgetKit runtime (`NshWidgetRuntime`) into
+/// `out` (`libNshWidgetRuntime.a`, `NshWidgetRuntime.swiftmodule`,
+/// `NshWidgetRuntime.swiftinterface`) for the host Mac architecture.
+fn macos_widget_runtime(root: &Path, out: &Path) -> anyhow::Result<()> {
+    let arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "x86_64"
+    };
+    let swift_dir = root.join("crates/nsh-platform-macos/swift/widget");
+    let mut sources: Vec<_> = fs::read_dir(&swift_dir)
+        .with_context(|| format!("read {}", swift_dir.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|ext| ext == "swift"))
+        .collect();
+    sources.sort();
+    let step = term::Step::start(format!("compiling NshWidgetRuntime ({arch})"));
+    fs::create_dir_all(out)?;
+    let cache = root.join("target/macos-widget-runtime/module-cache");
+    fs::create_dir_all(&cache)?;
+    let mut cmd = Command::new("xcrun");
+    cmd.args(["--sdk", "macosx", "swiftc"])
+        .arg("-module-cache-path")
+        .arg(&cache)
+        .args([
+            "-parse-as-library",
+            "-module-name",
+            "NshWidgetRuntime",
+            "-target",
+            &format!("{arch}-apple-macosx14.0"),
+            "-swift-version",
+            "5",
+            "-enable-library-evolution",
+            "-emit-library",
+            "-static",
+            "-O",
+            "-whole-module-optimization",
+        ])
+        .arg("-emit-module-path")
+        .arg(out.join("NshWidgetRuntime.swiftmodule"))
+        .arg("-emit-module-interface-path")
+        .arg(out.join("NshWidgetRuntime.swiftinterface"))
+        .arg("-o")
+        .arg(out.join("libNshWidgetRuntime.a"))
+        .args(&sources);
+    term::run(&mut cmd)?;
+    step.done(format!("compiled NshWidgetRuntime ({arch})"));
     Ok(())
 }
 

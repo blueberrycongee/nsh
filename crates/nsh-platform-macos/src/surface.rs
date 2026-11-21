@@ -362,6 +362,8 @@ pub(crate) struct Surface {
     pub(crate) file_drop: crate::file_drop::State,
     /// The GPU device and the shader views rendering ([`crate::shader`]).
     pub(crate) shaders: crate::shader::Shaders,
+    /// Darwin notification subscription for interactive desktop widget actions.
+    pub(crate) widget_observer: RefCell<Option<crate::widget::WidgetActionObserver>>,
 }
 
 /// A per-frame callback ([`Surface::add_frame_callback`]): gets the frame
@@ -457,6 +459,7 @@ impl Surface {
             main_window: Default::default(),
             window: Default::default(),
             shaders: Default::default(),
+            widget_observer: RefCell::new(None),
         });
         SURFACES.with(|s| s.borrow_mut().insert(key, Rc::downgrade(&surface)));
         // CoreText's first use loads fonts and caches (tens of

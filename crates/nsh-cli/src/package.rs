@@ -2049,12 +2049,32 @@ fn package_macos(
     activity_types(&mut plist, id, config.handoff);
     document_types(&mut plist, &config.file_types());
     let extensions = crate::app_extensions::embed_macos(&config.macos.extensions, &app, &plist)?;
+    let identity = options.sign.unwrap_or("-");
+    let app_dir = options.entry.parent().unwrap_or(Path::new("."));
+    let packaged_widgets = if !config.widgets.is_empty() {
+        Some(crate::macos_widgets::package_macos_widgets(
+            app_dir,
+            &app,
+            &nsh,
+            id,
+            executable,
+            &plist,
+            config,
+            &built.assets,
+            options.arch,
+            identity,
+        )?)
+    } else {
+        None
+    };
     plist::Value::Dictionary(plist)
         .to_file_xml(contents.join("Info.plist"))
         .context("write Info.plist")?;
     let mut entitlements = config.macos.entitlements()?;
     config.web_media_entitlements(&mut entitlements);
-    let identity = options.sign.unwrap_or("-");
+    if let Some(pw) = &packaged_widgets {
+        crate::macos_widgets::merge_main_app_group(&mut entitlements, &pw.app_group);
+    }
     for key in entitlements.keys() {
         if crate::apple::needs_profile(key) {
             ui::warn(format!(
@@ -2066,6 +2086,13 @@ fn package_macos(
     }
     // The app's signature seals its extensions': sign them inside-out first.
     crate::app_extensions::sign_macos(&extensions, identity, options.out)?;
+    if let Some(pw) = &packaged_widgets {
+        let ext_ent_path = options
+            .out
+            .join(format!("{executable}Widgets.entitlements"));
+        plist::Value::Dictionary(pw.appex_entitlements.clone()).to_file_xml(&ext_ent_path)?;
+        crate::app_extensions::sign_macos_bundle(&pw.appex_path, identity, Some(&ext_ent_path))?;
+    }
     let mut entitlements_path = None;
     if !entitlements.is_empty() {
         let path = options.out.join(format!("{executable}.entitlements"));

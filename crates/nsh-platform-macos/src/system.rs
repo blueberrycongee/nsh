@@ -736,6 +736,7 @@ pub(crate) fn command(surface: &Rc<Surface>, id: NodeId, command: &Command) {
                 }
             });
         }
+        Command::Widget(cmd) => crate::widget::handle_command(cmd),
         // The status bar is a phone's; layout animations arrive as mount
         // items.
         Command::StatusBar(_)

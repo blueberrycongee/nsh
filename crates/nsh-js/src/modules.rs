@@ -616,7 +616,10 @@ const WIDGET_EXPORTS: &[Item] = &[(
 )];
 
 /// `nsh/widget` authoring TypeScript interfaces.
-const WIDGET_TYPES: &str = r#"/** WidgetKit rendering mode reported or simulated during preview. */
+const WIDGET_TYPES: &str = r#"/** Supported widget size families across desktop and mobile hosts. */
+export type WidgetFamily = "small" | "medium" | "large";
+
+/** WidgetKit rendering mode reported or simulated during preview. */
 export type WidgetRenderingMode = "fullColor" | "accented" | "vibrant";
 
 /** Policy controlling when the OS next asks for a widget timeline refresh. */

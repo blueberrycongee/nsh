@@ -66,6 +66,7 @@ mod transition;
 mod tray;
 mod view;
 mod visual;
+mod widget;
 mod window;
 mod window_state;
 

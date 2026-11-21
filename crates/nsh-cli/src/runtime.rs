@@ -839,6 +839,101 @@ fn existing(
     )
 }
 
+/// Locates (or builds, in a cargo checkout) the precompiled macOS WidgetKit
+/// Swift runtime (`libNshWidgetRuntime.a` + `NshWidgetRuntime.swiftmodule`)
+/// for `arch` (`"arm64"` or `"x86_64"`).
+pub(crate) fn macos_widget_runtime(arch: &str) -> anyhow::Result<PathBuf> {
+    if let Some(root) = env::var_os("NSH_RUNTIME") {
+        let dir = PathBuf::from(root).join("macos/widget");
+        if dir.join("libNshWidgetRuntime.a").is_file() {
+            return Ok(dir);
+        }
+        bail!(
+            "macOS widget runtime not found at {}",
+            dir.join("libNshWidgetRuntime.a").display()
+        );
+    }
+    let exe = cli_exe()?;
+    let bin = exe.parent().context("cli has no parent directory")?;
+    let dist = bin.join("../runtime/macos/widget");
+    if dist.join("libNshWidgetRuntime.a").is_file() {
+        return Ok(dist);
+    }
+    let Some(root) = checkout(bin) else {
+        bail!(
+            "macOS widget runtime not found at {}",
+            dist.join("libNshWidgetRuntime.a").display()
+        );
+    };
+    let swift_dir = root.join("crates/nsh-platform-macos/swift/widget");
+    let mut sources: Vec<PathBuf> = fs::read_dir(&swift_dir)
+        .with_context(|| format!("read {}", swift_dir.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|ext| ext == "swift"))
+        .collect();
+    sources.sort();
+    if sources.is_empty() {
+        bail!("no Swift sources found in {}", swift_dir.display());
+    }
+    let out = bin
+        .parent()
+        .context("cli is not in a target directory")?
+        .join("macos-widget-runtime")
+        .join(arch);
+    let lib = out.join("libNshWidgetRuntime.a");
+    let module = out.join("NshWidgetRuntime.swiftmodule");
+    let newest_src = sources
+        .iter()
+        .filter_map(|p| fs::metadata(p).ok()?.modified().ok())
+        .max();
+    let built_mtime = fs::metadata(&lib).ok().and_then(|m| m.modified().ok());
+    if lib.is_file()
+        && module.is_file()
+        && newest_src.is_none_or(|src| built_mtime.is_some_and(|dst| dst >= src))
+    {
+        return Ok(out);
+    }
+    fs::create_dir_all(&out)?;
+    let cache = out.join("module-cache");
+    fs::create_dir_all(&cache)?;
+    let step = crate::ui::Step::start(format!("compiling NshWidgetRuntime ({arch})"));
+    let output = Command::new("xcrun")
+        .args(["--sdk", "macosx", "swiftc"])
+        .arg("-module-cache-path")
+        .arg(&cache)
+        .args([
+            "-parse-as-library",
+            "-module-name",
+            "NshWidgetRuntime",
+            "-target",
+            &format!("{arch}-apple-macosx14.0"),
+            "-swift-version",
+            "5",
+            "-enable-library-evolution",
+            "-emit-library",
+            "-static",
+            "-O",
+            "-whole-module-optimization",
+        ])
+        .arg("-emit-module-path")
+        .arg(&module)
+        .arg("-emit-module-interface-path")
+        .arg(out.join("NshWidgetRuntime.swiftinterface"))
+        .arg("-o")
+        .arg(&lib)
+        .args(&sources)
+        .output()
+        .context("run xcrun --sdk macosx swiftc")?;
+    if !output.status.success() {
+        bail!(
+            "compiling NshWidgetRuntime ({arch}) failed:\n{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    step.done(format!("compiled NshWidgetRuntime ({arch})"));
+    Ok(out)
+}
+
 /// The browser facade ships with the runtime, including registry-built apps.
 pub(crate) fn copy_browser_host(source: &Path, target: &Path) -> anyhow::Result<()> {
     let from = source.join("browser");

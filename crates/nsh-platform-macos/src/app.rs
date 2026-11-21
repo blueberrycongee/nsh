@@ -250,6 +250,11 @@ pub struct AppOptions {
     /// False by default; [`run_app`] sets it when the bundle declares that
     /// type (`nsh.json` `"handoff": true`).
     pub handoff: bool,
+    /// Directory containing compiled widget bundles and `manifest.json`
+    /// (`<App>.app/Contents/Resources/nsh/widgets` or an OTA package's
+    /// `widgets/` directory). `None` disables widget integration with zero
+    /// runtime overhead.
+    pub widgets: Option<PathBuf>,
 }
 
 impl Default for AppOptions {
@@ -279,6 +284,7 @@ impl Default for AppOptions {
             host: nsh_engine::HostChannel::default(),
             transparent: false,
             handoff: false,
+            widgets: None,
         }
     }
 }
@@ -456,6 +462,15 @@ impl AppView {
     /// Runs `app`, replacing what ran.
     pub fn load(&self, app: App) {
         let options = self.options.borrow();
+        let sets = ui_sets();
+        let host_tokens = self.surface.host_tokens.borrow().clone();
+        let loaded_widgets = options
+            .widgets
+            .as_deref()
+            .and_then(|dir| crate::widget::load_from_dir(dir, sets.clone(), host_tokens.clone()));
+        let widget_host = loaded_widgets
+            .as_ref()
+            .map(|w| w.host.clone() as Arc<dyn nsh_core::widget::WidgetHost>);
         let config = EngineConfig {
             app,
             viewport: nsh_core::Size::new(px(0.0), px(0.0)),
@@ -470,7 +485,7 @@ impl AppView {
             // NSH draws no header: a page's `header` sits at its top.
             header_heights: nsh_core::NO_NATIVE_HEADER,
             limits: options.limits,
-            ui_sets: ui_sets(),
+            ui_sets: sets,
             runtime: None,
             support_dir: nsh_engine::support_dir(),
             data_dir: options.data_dir.clone(),
@@ -491,8 +506,16 @@ impl AppView {
                 Arc::new(crate::login_item::LoginItem)
                     as Arc<dyn nsh_core::desktop::LoginItemBackend>
             }),
-            widget: None,
+            widget: widget_host,
         };
+        let observer = loaded_widgets.as_ref().and_then(|w| {
+            crate::widget::WidgetActionObserver::install(
+                self.surface.key(),
+                &w.app_group,
+                w.host.clone(),
+            )
+        });
+        *self.surface.widget_observer.borrow_mut() = observer;
         crate::image::set_asset_base(&self.surface, options.asset_base.clone());
         *self.surface.chunks.borrow_mut() = options.chunks.clone();
         self.surface
@@ -501,6 +524,19 @@ impl AppView {
         self.surface.native.set_app(&config.app);
         crate::native::warm_web_later(&self.surface);
         self.surface.start(config);
+        // Drain any offline widget actions queued while the app was closed.
+        if let Some(loaded) = loaded_widgets {
+            use nsh_core::widget::WidgetHost as _;
+            for event in loaded.host.drain_pending_actions() {
+                if let Ok(json) = serde_json::to_value(&event) {
+                    self.surface.event(
+                        nsh_core::ROOT_ID,
+                        nsh_core::EventKind::WidgetAction,
+                        nsh_core::EventPayload::Json(json),
+                    );
+                }
+            }
+        }
     }
 
     /// Where `asset:/` URIs resolve from now on.

@@ -16,6 +16,7 @@ mod dev_port;
 mod entry;
 mod init;
 mod logger;
+mod macos_widgets;
 mod module_meta;
 mod native_features;
 mod nshm;

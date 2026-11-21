@@ -84,6 +84,7 @@ objc2-io-kit.workspace = true
 objc2-io-surface.workspace = true
 objc2-quartz-core.workspace = true
 rustc-hash.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 # The direction of a paragraph from its content (`text::natural_rtl`).
 unicode-bidi.workspace = true
