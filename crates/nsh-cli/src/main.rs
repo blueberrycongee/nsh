@@ -600,7 +600,8 @@ struct PackageArgs {
     /// App icon: a square PNG, ideally 1024×1024.
     #[arg(long)]
     icon: Option<PathBuf>,
-    /// Code signing identity for devices, e.g. "Apple Development: …".
+    /// Code signing identity for iOS devices or macOS packages, e.g.
+    /// "Apple Development: …" or "Developer ID Application: …".
     #[arg(long)]
     sign: Option<String>,
     /// Provisioning profile for devices (`.mobileprovision`). Repeat it to

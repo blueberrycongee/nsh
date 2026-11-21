@@ -40,7 +40,7 @@ use std::{collections::BTreeMap, path::Path, process::Command};
 use anyhow::{Context as _, bail};
 use serde_json::{Map, Value};
 
-use crate::{package::AppConfig, ui};
+use crate::{apple::ApplePlatform, package::AppConfig, ui};
 
 /// The elements `android.queries` takes.
 const QUERY_ELEMENTS: &[&str] = &["intent", "package", "provider"];
@@ -56,6 +56,10 @@ pub(crate) struct ModuleMeta {
     pub(crate) ios_info: Map<String, Value>,
     /// Entitlements of iOS packages.
     pub(crate) ios_entitlements: Map<String, Value>,
+    /// `Info.plist` keys of macOS packages.
+    pub(crate) macos_info: Map<String, Value>,
+    /// Entitlements of macOS packages.
+    pub(crate) macos_entitlements: Map<String, Value>,
     /// Android permissions (`<uses-permission>`).
     pub(crate) android_permissions: Vec<String>,
     /// Elements of the manifest's `<queries>`.
@@ -74,6 +78,8 @@ pub(crate) struct ModuleMeta {
 pub(crate) enum Platform {
     /// iOS, its simulator and Mac Catalyst.
     Ios,
+    /// macOS (AppKit).
+    Macos,
     Android,
 }
 
@@ -169,7 +175,7 @@ impl ModuleMeta {
         Ok((meta, warnings))
     }
 
-    /// Merges one section (`at`, of package `name`): its `ios` and
+    /// Merges one section (`at`, of package `name`): its `ios`, `macos` and
     /// `android` tables.
     fn merge_section(
         &mut self,
@@ -182,7 +188,8 @@ impl ModuleMeta {
             match key.as_str() {
                 // Read by itself: a feature's section is merged only when on.
                 "features" if at == "[package.metadata.nsh]" => {}
-                "ios" => self.merge_ios(name, at, value, warnings)?,
+                "ios" => self.merge_apple(name, at, ApplePlatform::Ios, value, warnings)?,
+                "macos" => self.merge_apple(name, at, ApplePlatform::Macos, value, warnings)?,
                 "android" => self.merge_android(name, at, value, warnings)?,
                 _ => warnings.push(format!(
                     "{name}: {at} `{key}` is not something this nsh reads: left out"
@@ -192,23 +199,33 @@ impl ModuleMeta {
         Ok(())
     }
 
-    fn merge_ios(
+    fn merge_apple(
         &mut self,
         name: &str,
         at: &str,
-        ios: &Value,
+        platform: ApplePlatform,
+        table: &Value,
         warnings: &mut Vec<String>,
     ) -> anyhow::Result<()> {
-        let ios = ios
+        let section_name = platform.key();
+        let table = table
             .as_object()
-            .with_context(|| format!("{name}: {at} `ios` is a table"))?;
-        for (key, value) in ios {
-            let (target, kind) = match key.as_str() {
-                "infoPlist" => (&mut self.ios_info, "ios.infoPlist"),
-                "entitlements" => (&mut self.ios_entitlements, "ios.entitlements"),
+            .with_context(|| format!("{name}: {at} `{section_name}` is a table"))?;
+        for (key, value) in table {
+            let (target, kind, is_info) = match (platform, key.as_str()) {
+                (ApplePlatform::Ios, "infoPlist") => (&mut self.ios_info, "ios.infoPlist", true),
+                (ApplePlatform::Ios, "entitlements") => {
+                    (&mut self.ios_entitlements, "ios.entitlements", false)
+                }
+                (ApplePlatform::Macos, "infoPlist") => {
+                    (&mut self.macos_info, "macos.infoPlist", true)
+                }
+                (ApplePlatform::Macos, "entitlements") => {
+                    (&mut self.macos_entitlements, "macos.entitlements", false)
+                }
                 _ => {
                     warnings.push(format!(
-                        "{name}: {at} `ios.{key}` is not something this nsh reads: left out"
+                        "{name}: {at} `{section_name}.{key}` is not something this nsh reads: left out"
                     ));
                     continue;
                 }
@@ -217,9 +234,10 @@ impl ModuleMeta {
                 .as_object()
                 .with_context(|| format!("{name}: {at} `{kind}` is a table"))?;
             for (entry, value) in entries {
-                let reserved = match kind {
-                    "ios.infoPlist" => crate::apple::is_reserved_ios_info(entry),
-                    _ => crate::apple::is_reserved_ios_entitlement(entry),
+                let reserved = if is_info {
+                    crate::apple::is_reserved_info(platform, entry)
+                } else {
+                    crate::apple::is_reserved_entitlement(entry)
                 };
                 if reserved {
                     bail!("{name}: {at} `{kind}.{entry}` is a key NSH sets itself");
@@ -319,20 +337,22 @@ impl ModuleMeta {
     /// key two crates set to different values that the app does not set is
     /// an error naming both.
     pub(crate) fn apply(&self, config: &mut AppConfig, platform: Platform) -> anyhow::Result<()> {
-        // The clashes are all iOS keys: an Android package has none of them.
-        if platform == Platform::Ios {
-            for clash in &self.clashes {
-                let app = match clash.kind {
-                    "ios.infoPlist" => &config.ios.info_plist,
-                    _ => &config.ios.entitlements,
-                };
-                if !app.contains_key(&clash.key) {
-                    bail!("{clash}");
-                }
+        for clash in &self.clashes {
+            let app = match (platform, clash.kind) {
+                (Platform::Ios, "ios.infoPlist") => &config.ios.info_plist,
+                (Platform::Ios, "ios.entitlements") => &config.ios.entitlements,
+                (Platform::Macos, "macos.infoPlist") => &config.macos.info_plist,
+                (Platform::Macos, "macos.entitlements") => &config.macos.entitlements,
+                _ => continue,
+            };
+            if !app.contains_key(&clash.key) {
+                bail!("{clash}");
             }
         }
         under(&mut config.ios.info_plist, &self.ios_info);
         under(&mut config.ios.entitlements, &self.ios_entitlements);
+        under(&mut config.macos.info_plist, &self.macos_info);
+        under(&mut config.macos.entitlements, &self.macos_entitlements);
         join_strings(
             &mut config.android.permissions,
             self.android_permissions.clone(),
@@ -753,5 +773,54 @@ mod tests {
             ["CAMERA", "android.permission.POST_NOTIFICATIONS"]
         );
         assert_eq!(config.android.queries.len(), 1);
+    }
+
+    #[test]
+    fn macos_info_plist_and_entitlements_merge_and_clash() {
+        let a = json!({ "nsh": { "macos": {
+            "infoPlist": { "NSCameraUsageDescription": "A uses camera." },
+            "entitlements": { "com.apple.security.application-groups": ["T.a"] },
+        } } });
+        let b = json!({ "nsh": { "macos": {
+            "infoPlist": { "NSCameraUsageDescription": "B uses camera." },
+            "entitlements": { "com.apple.security.application-groups": ["T.a", "T.b"] },
+        } } });
+        let (meta, warnings) =
+            ModuleMeta::from_metadata(&metadata(&[("a", a, &[]), ("b", b, &[])])).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(
+            meta.macos_entitlements["com.apple.security.application-groups"],
+            json!(["T.a", "T.b"])
+        );
+        // Unresolved clash stops macOS packaging.
+        let error = meta
+            .apply(&mut AppConfig::default(), Platform::Macos)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("a and b set `NSCameraUsageDescription` (macos.infoPlist)"),
+            "{error}"
+        );
+        // App settles the clash and arrays join.
+        let mut config = AppConfig::default();
+        config
+            .macos
+            .info_plist
+            .insert("NSCameraUsageDescription".into(), json!("App wins."));
+        meta.apply(&mut config, Platform::Macos).unwrap();
+        assert_eq!(
+            config.macos.info_plist["NSCameraUsageDescription"],
+            "App wins."
+        );
+        assert_eq!(
+            config.macos.entitlements["com.apple.security.application-groups"],
+            json!(["T.a", "T.b"])
+        );
+        // Reserved macOS key is rejected.
+        let reserved = json!({ "nsh": { "macos": { "infoPlist": { "LSUIElement": true } } } });
+        let err = ModuleMeta::from_metadata(&metadata(&[("x", reserved, &[])]))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("NSH sets itself"), "{err}");
     }
 }

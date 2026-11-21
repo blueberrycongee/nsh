@@ -55,12 +55,13 @@ pub(crate) enum PackageTarget {
 
 impl PackageTarget {
     /// The platform [`crate::module_meta`] reads the app's dependency
-    /// graph for: iOS and Android, where crates declare package entries.
+    /// graph for: iOS, macOS and Android, where crates declare package entries.
     fn module_meta_triple(self) -> Option<(&'static str, crate::module_meta::Platform)> {
         use crate::module_meta::Platform;
         match self {
             PackageTarget::Ios => Some(("aarch64-apple-ios", Platform::Ios)),
             PackageTarget::IosSimulator => Some(("aarch64-apple-ios-sim", Platform::Ios)),
+            PackageTarget::Macos => Some((host_macos_triple(), Platform::Macos)),
             PackageTarget::Android => Some(("aarch64-linux-android", Platform::Android)),
             _ => None,
         }
@@ -960,6 +961,13 @@ pub(crate) fn read_config(entry: &Path) -> anyhow::Result<AppConfig> {
     config.ios.extensions = crate::app_extensions::read(
         std::mem::take(&mut config.ios.extensions),
         dir,
+        ApplePlatform::Ios,
+        &mut ignored,
+    );
+    config.macos.extensions = crate::app_extensions::read(
+        std::mem::take(&mut config.macos.extensions),
+        dir,
+        ApplePlatform::Macos,
         &mut ignored,
     );
     config.icon = match config.icon {
@@ -2029,11 +2037,13 @@ fn package_macos(
     url_types(&mut plist, id, &schemes);
     activity_types(&mut plist, id, config.handoff);
     document_types(&mut plist, &config.file_types());
+    let extensions = crate::app_extensions::embed_macos(&config.macos.extensions, &app, &plist)?;
     plist::Value::Dictionary(plist)
         .to_file_xml(contents.join("Info.plist"))
         .context("write Info.plist")?;
     let mut entitlements = config.macos.entitlements()?;
     config.web_media_entitlements(&mut entitlements);
+    let identity = options.sign.unwrap_or("-");
     for key in entitlements.keys() {
         if crate::apple::needs_profile(key) {
             ui::warn(format!(
@@ -2043,21 +2053,16 @@ fn package_macos(
             ));
         }
     }
-    let mut codesign = Command::new("codesign");
-    codesign.args(["--force", "--sign", "-", "--timestamp=none"]);
+    // The app's signature seals its extensions': sign them inside-out first.
+    crate::app_extensions::sign_macos(&extensions, identity, options.out)?;
+    let mut entitlements_path = None;
     if !entitlements.is_empty() {
         let path = options.out.join(format!("{executable}.entitlements"));
         plist::Value::Dictionary(entitlements).to_file_xml(&path)?;
-        codesign.arg("--entitlements").arg(path);
+        entitlements_path = Some(path);
     }
-    let output = codesign.arg(&app).output().context("run codesign")?;
-    if !output.status.success() {
-        bail!(
-            "codesign failed for {}: {}",
-            app.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
-    }
+    codesign_macos(&app, identity, entitlements_path.as_deref())?;
+    codesign_verify(&app)?;
     crate::updater::archive_macos_app(
         config,
         name,
@@ -2724,6 +2729,72 @@ pub(crate) fn codesign(
     Ok(())
 }
 
+/// The arguments passed to `codesign` for a macOS bundle or nested binary.
+/// Certificate-signed builds enable Hardened Runtime (`--options runtime`)
+/// and a secure timestamp (`--timestamp`), as notarization and Developer ID
+/// distribution require; ad-hoc builds (`"-"`) disable timestamping.
+pub(crate) fn codesign_macos_args(
+    bundle: &Path,
+    identity: &str,
+    entitlements: Option<&Path>,
+) -> Vec<OsString> {
+    let mut args: Vec<OsString> = vec!["--force".into(), "--sign".into(), identity.into()];
+    if identity == "-" {
+        args.push("--timestamp=none".into());
+    } else {
+        args.push("--options".into());
+        args.push("runtime".into());
+        args.push("--timestamp".into());
+    }
+    if let Some(e) = entitlements {
+        args.push("--entitlements".into());
+        args.push(e.as_os_str().to_os_string());
+    }
+    args.push(bundle.as_os_str().to_os_string());
+    args
+}
+
+/// Signs a macOS bundle or nested code item with `identity` (enabling
+/// Hardened Runtime and secure timestamping when signed with a certificate).
+pub(crate) fn codesign_macos(
+    bundle: &Path,
+    identity: &str,
+    entitlements: Option<&Path>,
+) -> anyhow::Result<()> {
+    let output = Command::new("codesign")
+        .args(codesign_macos_args(bundle, identity, entitlements))
+        .stdout(Stdio::null())
+        .output()
+        .context("run codesign")?;
+    if !output.status.success() {
+        bail!(
+            "codesign failed for {}: {}",
+            bundle.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// Verifies a signed macOS app bundle and all nested extensions/code with
+/// `codesign --verify --deep --strict`.
+pub(crate) fn codesign_verify(app: &Path) -> anyhow::Result<()> {
+    let output = Command::new("codesign")
+        .args(["--verify", "--deep", "--strict"])
+        .arg(app)
+        .stdout(Stdio::null())
+        .output()
+        .context("run codesign --verify")?;
+    if !output.status.success() {
+        bail!(
+            "codesign verification failed for {}: {}",
+            app.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
 /// `Payload/<App>.app` zipped, keeping permissions and symlinks.
 fn make_ipa(app: &Path, ipa: &Path) -> anyhow::Result<()> {
     let staging = ipa.with_extension("payload");
@@ -3155,11 +3226,12 @@ mod tests {
             Some(dir.join("ios/sim/Widget.appex").as_path())
         );
         assert_eq!(extensions[1].simulator_path, None);
-        let (entitlements, section) = crate::apple::extension_entitlements(&extensions[0]).unwrap();
+        let (entitlements, section) =
+            crate::apple::extension_entitlements(&extensions[0], ApplePlatform::Ios).unwrap();
         assert_eq!(section, "ios.extensions[0].entitlements");
         assert!(entitlements.contains_key("com.apple.security.application-groups"));
         assert!(
-            crate::apple::extension_entitlements(&extensions[1])
+            crate::apple::extension_entitlements(&extensions[1], ApplePlatform::Ios)
                 .unwrap()
                 .0
                 .is_empty()
@@ -4077,5 +4149,100 @@ mod tests {
             ]
         );
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn macos_extensions_are_relative_to_nsh_json() {
+        let dir = std::env::temp_dir().join(format!(
+            "nsh-cli-macos-extensions-config-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("nsh.json"),
+            r#"{ "macos": { "extensions": [
+                { "path": "macos/Widgets.appex", "simulatorPath": "macos/sim/Widgets.appex",
+                  "entitlements": {
+                    "com.apple.security.app-sandbox": true,
+                    "com.apple.security.application-groups": ["TEAM123456.com.example.widgets"]
+                  } },
+                { "path": "macos/Share.appex" }
+            ] } }"#,
+        )
+        .unwrap();
+        let config = read_config(&dir.join("App.tsx")).unwrap();
+        let extensions = &config.macos.extensions;
+        assert_eq!(extensions.len(), 2);
+        assert_eq!(extensions[0].path, dir.join("macos/Widgets.appex"));
+        assert_eq!(extensions[0].simulator_path, None);
+        let (entitlements, section) =
+            crate::apple::extension_entitlements(&extensions[0], ApplePlatform::Macos).unwrap();
+        assert_eq!(section, "macos.extensions[0].entitlements");
+        assert!(entitlements.contains_key("com.apple.security.app-sandbox"));
+        assert!(entitlements.contains_key("com.apple.security.application-groups"));
+        assert!(
+            crate::apple::extension_entitlements(&extensions[1], ApplePlatform::Macos)
+                .unwrap()
+                .0
+                .is_empty()
+        );
+
+        std::fs::write(
+            dir.join("nsh.json"),
+            r#"{ "macos": { "extensions": [
+                { "path": "Widgets.appex", "entitlements": { "application-identifier": "T.x" } }
+            ] } }"#,
+        )
+        .unwrap();
+        let error = read_config(&dir.join("App.tsx")).unwrap_err().to_string();
+        assert!(
+            error.contains("macos.extensions[0].entitlements: `application-identifier`"),
+            "{error}"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn codesign_macos_args_enables_hardened_runtime_for_certificates() {
+        let app = Path::new("/tmp/Pulse.app");
+        let ent = Path::new("/tmp/Pulse.entitlements");
+        let adhoc: Vec<String> = codesign_macos_args(app, "-", Some(ent))
+            .into_iter()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            adhoc,
+            [
+                "--force",
+                "--sign",
+                "-",
+                "--timestamp=none",
+                "--entitlements",
+                "/tmp/Pulse.entitlements",
+                "/tmp/Pulse.app",
+            ]
+        );
+        let dev_id: Vec<String> = codesign_macos_args(
+            app,
+            "Developer ID Application: Example (TEAM123456)",
+            Some(ent),
+        )
+        .into_iter()
+        .map(|s| s.to_string_lossy().into_owned())
+        .collect();
+        assert_eq!(
+            dev_id,
+            [
+                "--force",
+                "--sign",
+                "Developer ID Application: Example (TEAM123456)",
+                "--options",
+                "runtime",
+                "--timestamp",
+                "--entitlements",
+                "/tmp/Pulse.entitlements",
+                "/tmp/Pulse.app",
+            ]
+        );
     }
 }
