@@ -86,11 +86,11 @@ impl Widget {
                     "Widget.setTimeline: entry `relevance` must be between 0 and 1".into(),
                 ));
             }
-            let mut item = WidgetTimelineDataEntry::default();
-            item.date_ms = entry.date as i64;
-            item.data = entry.data;
-            item.relevance = entry.relevance.map(|r| r as f32);
-            parsed.push(item);
+            parsed.push(WidgetTimelineDataEntry {
+                date_ms: entry.date as i64,
+                data: entry.data,
+                relevance: entry.relevance.map(|r| r as f32),
+            });
         }
         let Some(host) = sys.widget else {
             return Err(unavailable("Widget.setTimeline"));

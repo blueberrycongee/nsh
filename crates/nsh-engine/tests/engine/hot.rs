@@ -186,6 +186,7 @@ fn edits_replace_modules_and_keep_unrelated_state() {
         audio: None,
         windows: None,
         login_item: None,
+        widget: None,
         data_dir: None,
     };
     let engine = Engine::start(
@@ -351,6 +352,7 @@ fn entry_edits_keep_navigation_and_state() {
             audio: None,
             windows: None,
             login_item: None,
+            widget: None,
             data_dir: None,
         };
         let engine = Engine::start(
@@ -500,6 +502,7 @@ fn nested_hot_components_render_the_stacks_screen() {
         audio: None,
         windows: None,
         login_item: None,
+        widget: None,
         data_dir: None,
     };
     let engine = Engine::start(

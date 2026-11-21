@@ -88,6 +88,7 @@ fn start() -> (Engine, Receiver<MountBatch>) {
         audio: None,
         windows: None,
         login_item: None,
+        widget: None,
         data_dir: None,
     };
     (
@@ -269,6 +270,7 @@ fn start_app_culling(
         audio: None,
         windows: None,
         login_item: None,
+        widget: None,
         data_dir: None,
     };
     (

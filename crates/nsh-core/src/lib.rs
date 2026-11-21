@@ -117,7 +117,10 @@ pub use text::ApproxPrepared;
 
 pub use crate::{
     color::{Hsla, Rgba},
-    core::{ApplyError, Core, ListBind, ListScrollPosition, MAX_TREE_DEPTH, Measurement},
+    core::{
+        ApplyError, Core, ListBind, ListScrollPosition, MAX_TREE_DEPTH, Measurement,
+        WidgetAppearanceCapture,
+    },
     effects::{
         BackdropMaterial, BlendMode, BoxShadow, ColorStop, Cursor, Effects, Filter, GlassEffect,
         Gradient, GradientKind, GradientSize, KeyframeAnimation, Keyframes, MacOsBackdrop,

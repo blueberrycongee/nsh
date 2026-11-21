@@ -106,6 +106,7 @@ fn start_in(
         audio: None,
         windows: None,
         login_item: None,
+        widget: None,
         data_dir: None,
     };
     (

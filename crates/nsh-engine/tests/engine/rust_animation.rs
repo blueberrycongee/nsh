@@ -121,6 +121,7 @@ impl Platform {
             audio: None,
             windows: None,
             login_item: None,
+            widget: None,
             data_dir: None,
         };
         let engine = Engine::start(config, || ApproxTextEngine, ChannelSink(tx)).unwrap();

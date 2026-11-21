@@ -1126,6 +1126,7 @@ fn engine_config(options: &AppOptions, app: App) -> EngineConfig {
         audio: None,
         windows: options.windows.clone(),
         login_item: None,
+        widget: None,
     }
 }
 

@@ -74,6 +74,7 @@ fn start(app: &str) -> (Engine, Receiver<MountBatch>) {
         audio: None,
         windows: None,
         login_item: None,
+        widget: None,
         data_dir: None,
     };
     (

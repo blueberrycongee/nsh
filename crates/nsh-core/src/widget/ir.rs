@@ -298,8 +298,7 @@ fn packed_to_rgba(color: Color) -> [f32; 4] {
 }
 
 /// Fill paint for widget backgrounds and container backgrounds.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum WidgetFill {
     /// Solid dual-appearance color.
@@ -314,6 +313,66 @@ pub enum WidgetFill {
         /// Color stops ordered from 0.0 to 1.0.
         stops: Vec<WidgetGradientStop>,
     },
+}
+
+// Flat wire representation avoids `#[serde(tag = "kind")]` buffering into
+// `serde::__private::de::Content`, which fails on floats when `serde_json`
+// has `arbitrary_precision` enabled in the dependency graph.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WidgetFillWire {
+    kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    color: Option<WidgetColor>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    angle_deg: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stops: Option<Vec<WidgetGradientStop>>,
+}
+
+impl Serialize for WidgetFill {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let wire = match self {
+            Self::Solid { color } => WidgetFillWire {
+                kind: "solid".into(),
+                color: Some(*color),
+                angle_deg: None,
+                stops: None,
+            },
+            Self::LinearGradient { angle_deg, stops } => WidgetFillWire {
+                kind: "linearGradient".into(),
+                color: None,
+                angle_deg: Some(*angle_deg),
+                stops: Some(stops.clone()),
+            },
+        };
+        wire.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for WidgetFill {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = WidgetFillWire::deserialize(deserializer)?;
+        match wire.kind.as_str() {
+            "solid" => Ok(Self::Solid {
+                color: wire
+                    .color
+                    .ok_or_else(|| serde::de::Error::missing_field("color"))?,
+            }),
+            "linearGradient" => Ok(Self::LinearGradient {
+                angle_deg: wire
+                    .angle_deg
+                    .ok_or_else(|| serde::de::Error::missing_field("angleDeg"))?,
+                stops: wire
+                    .stops
+                    .ok_or_else(|| serde::de::Error::missing_field("stops"))?,
+            }),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["solid", "linearGradient"],
+            )),
+        }
+    }
 }
 
 /// One stop of a [`WidgetFill::LinearGradient`].
@@ -579,8 +638,7 @@ pub enum WidgetDateMode {
 }
 
 /// Image source inside a widget IR tree.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum WidgetImageSource {
     /// App asset copied into the widget bundle / App Group (`assets/<path>`).
@@ -598,6 +656,66 @@ pub enum WidgetImageSource {
         /// Symbol identifier (e.g. `"arrow.clockwise"`).
         name: String,
     },
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WidgetImageSourceWire {
+    kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+}
+
+impl Serialize for WidgetImageSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let wire = match self {
+            Self::Asset { path } => WidgetImageSourceWire {
+                kind: "asset".into(),
+                path: Some(path.clone()),
+                name: None,
+            },
+            Self::File { path } => WidgetImageSourceWire {
+                kind: "file".into(),
+                path: Some(path.clone()),
+                name: None,
+            },
+            Self::Symbol { name } => WidgetImageSourceWire {
+                kind: "symbol".into(),
+                path: None,
+                name: Some(name.clone()),
+            },
+        };
+        wire.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for WidgetImageSource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let wire = WidgetImageSourceWire::deserialize(deserializer)?;
+        match wire.kind.as_str() {
+            "asset" => Ok(Self::Asset {
+                path: wire
+                    .path
+                    .ok_or_else(|| serde::de::Error::missing_field("path"))?,
+            }),
+            "file" => Ok(Self::File {
+                path: wire
+                    .path
+                    .ok_or_else(|| serde::de::Error::missing_field("path"))?,
+            }),
+            "symbol" => Ok(Self::Symbol {
+                name: wire
+                    .name
+                    .ok_or_else(|| serde::de::Error::missing_field("name"))?,
+            }),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["asset", "file", "symbol"],
+            )),
+        }
+    }
 }
 
 /// How an image fits within its widget box.
@@ -646,8 +764,7 @@ pub struct WidgetHints {
 }
 
 /// A platform-neutral node in the evaluated Widget Tree IR.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum WidgetNode {
     /// Layout container (`VStack`, `HStack`, or `ZStack`).
@@ -666,10 +783,8 @@ pub enum WidgetNode {
         /// Horizontal alignment.
         align: WidgetTextAlign,
         /// Maximum number of displayed lines (`None`: unlimited).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         line_limit: Option<u32>,
         /// Participate in the Tinted accent group.
-        #[serde(default)]
         accentable: bool,
         /// Node layout constraints.
         layout: WidgetLayout,
@@ -683,7 +798,6 @@ pub enum WidgetNode {
         /// Resolved text style.
         style: WidgetTextStyle,
         /// Participate in the Tinted accent group.
-        #[serde(default)]
         accentable: bool,
         /// Node layout constraints.
         layout: WidgetLayout,
@@ -695,7 +809,6 @@ pub enum WidgetNode {
         /// Content fit mode.
         resize_mode: WidgetResizeMode,
         /// Optional dual-appearance tint color.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         tint: Option<WidgetColor>,
         /// Rendering behavior in Tinted mode.
         accented_mode: WidgetAccentedImageMode,
@@ -709,13 +822,10 @@ pub enum WidgetNode {
         /// Progress fraction in `0.0..=1.0`.
         value: f32,
         /// Optional dual-appearance track background color.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         track_color: Option<WidgetColor>,
         /// Optional dual-appearance indicator fill color.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         indicator_color: Option<WidgetColor>,
         /// Optional corner radius in points.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         corner_radius: Option<Points>,
         /// Node layout constraints.
         layout: WidgetLayout,
@@ -725,7 +835,6 @@ pub enum WidgetNode {
         /// Target deep link URL.
         href: String,
         /// Optional VoiceOver / accessibility label.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         accessibility_label: Option<String>,
         /// Visual content of the link.
         child: Box<WidgetNode>,
@@ -735,17 +844,369 @@ pub enum WidgetNode {
         /// Action identifier dispatched to `Widget.on("action", ...)`.
         action: String,
         /// Optional serialized JSON payload attached to the button.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         payload_json: Option<String>,
         /// Optional serialized JSON patch applied optimistically when offline.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         patch_json: Option<String>,
         /// Optional VoiceOver / accessibility label.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         accessibility_label: Option<String>,
         /// Visual content of the button.
         child: Box<WidgetNode>,
     },
+}
+
+impl Serialize for WidgetNode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // Notice `Date` uses `"style": WidgetTextStyle`, whereas `Box`/`Image`
+        // use `"style": WidgetBoxStyle`. Serialize via dedicated variant structs
+        // so `"style"` always keeps its clean JSON field name.
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct BoxOut<'a> {
+            kind: &'static str,
+            layout: &'a WidgetLayout,
+            style: &'a WidgetBoxStyle,
+            children: &'a [WidgetNode],
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct TextOut<'a> {
+            kind: &'static str,
+            runs: &'a [WidgetTextRun],
+            align: WidgetTextAlign,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            line_limit: Option<u32>,
+            accentable: bool,
+            layout: &'a WidgetLayout,
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct DateOut<'a> {
+            kind: &'static str,
+            timestamp_ms: i64,
+            mode: WidgetDateMode,
+            style: &'a WidgetTextStyle,
+            accentable: bool,
+            layout: &'a WidgetLayout,
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ImageOut<'a> {
+            kind: &'static str,
+            source: &'a WidgetImageSource,
+            resize_mode: WidgetResizeMode,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            tint: Option<WidgetColor>,
+            accented_mode: WidgetAccentedImageMode,
+            style: &'a WidgetBoxStyle,
+            layout: &'a WidgetLayout,
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ProgressOut<'a> {
+            kind: &'static str,
+            value: f32,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            track_color: Option<WidgetColor>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            indicator_color: Option<WidgetColor>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            corner_radius: Option<Points>,
+            layout: &'a WidgetLayout,
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct LinkOut<'a> {
+            kind: &'static str,
+            href: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            accessibility_label: Option<&'a str>,
+            child: &'a WidgetNode,
+        }
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ActionOut<'a> {
+            kind: &'static str,
+            action: &'a str,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            payload_json: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            patch_json: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            accessibility_label: Option<&'a str>,
+            child: &'a WidgetNode,
+        }
+        match self {
+            Self::Box {
+                layout,
+                style,
+                children,
+            } => BoxOut {
+                kind: "box",
+                layout,
+                style,
+                children,
+            }
+            .serialize(serializer),
+            Self::Text {
+                runs,
+                align,
+                line_limit,
+                accentable,
+                layout,
+            } => TextOut {
+                kind: "text",
+                runs,
+                align: *align,
+                line_limit: *line_limit,
+                accentable: *accentable,
+                layout,
+            }
+            .serialize(serializer),
+            Self::Date {
+                timestamp_ms,
+                mode,
+                style,
+                accentable,
+                layout,
+            } => DateOut {
+                kind: "date",
+                timestamp_ms: *timestamp_ms,
+                mode: *mode,
+                style,
+                accentable: *accentable,
+                layout,
+            }
+            .serialize(serializer),
+            Self::Image {
+                source,
+                resize_mode,
+                tint,
+                accented_mode,
+                style,
+                layout,
+            } => ImageOut {
+                kind: "image",
+                source,
+                resize_mode: *resize_mode,
+                tint: *tint,
+                accented_mode: *accented_mode,
+                style,
+                layout,
+            }
+            .serialize(serializer),
+            Self::Progress {
+                value,
+                track_color,
+                indicator_color,
+                corner_radius,
+                layout,
+            } => ProgressOut {
+                kind: "progress",
+                value: *value,
+                track_color: *track_color,
+                indicator_color: *indicator_color,
+                corner_radius: *corner_radius,
+                layout,
+            }
+            .serialize(serializer),
+            Self::Link {
+                href,
+                accessibility_label,
+                child,
+            } => LinkOut {
+                kind: "link",
+                href,
+                accessibility_label: accessibility_label.as_deref(),
+                child,
+            }
+            .serialize(serializer),
+            Self::Action {
+                action,
+                payload_json,
+                patch_json,
+                accessibility_label,
+                child,
+            } => ActionOut {
+                kind: "action",
+                action,
+                payload_json: payload_json.as_deref(),
+                patch_json: patch_json.as_deref(),
+                accessibility_label: accessibility_label.as_deref(),
+                child,
+            }
+            .serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for WidgetNode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut raw = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        let kind = raw
+            .remove("kind")
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .ok_or_else(|| serde::de::Error::missing_field("kind"))?;
+        let obj = serde_json::Value::Object(raw);
+        let err = |e: serde_json::Error| serde::de::Error::custom(e.to_string());
+        match kind.as_str() {
+            "box" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct BoxIn {
+                    #[serde(default)]
+                    layout: WidgetLayout,
+                    #[serde(default)]
+                    style: WidgetBoxStyle,
+                    #[serde(default)]
+                    children: Vec<WidgetNode>,
+                }
+                let v: BoxIn = serde_json::from_value(obj).map_err(err)?;
+                Ok(Self::Box {
+                    layout: v.layout,
+                    style: v.style,
+                    children: v.children,
+                })
+            }
+            "text" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct TextIn {
+                    #[serde(default)]
+                    runs: Vec<WidgetTextRun>,
+                    #[serde(default)]
+                    align: WidgetTextAlign,
+                    #[serde(default)]
+                    line_limit: Option<u32>,
+                    #[serde(default)]
+                    accentable: bool,
+                    #[serde(default)]
+                    layout: WidgetLayout,
+                }
+                let v: TextIn = serde_json::from_value(obj).map_err(err)?;
+                Ok(Self::Text {
+                    runs: v.runs,
+                    align: v.align,
+                    line_limit: v.line_limit,
+                    accentable: v.accentable,
+                    layout: v.layout,
+                })
+            }
+            "date" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct DateIn {
+                    timestamp_ms: i64,
+                    #[serde(default)]
+                    mode: WidgetDateMode,
+                    #[serde(default)]
+                    style: WidgetTextStyle,
+                    #[serde(default)]
+                    accentable: bool,
+                    #[serde(default)]
+                    layout: WidgetLayout,
+                }
+                let v: DateIn = serde_json::from_value(obj).map_err(err)?;
+                Ok(Self::Date {
+                    timestamp_ms: v.timestamp_ms,
+                    mode: v.mode,
+                    style: v.style,
+                    accentable: v.accentable,
+                    layout: v.layout,
+                })
+            }
+            "image" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct ImageIn {
+                    source: WidgetImageSource,
+                    #[serde(default)]
+                    resize_mode: WidgetResizeMode,
+                    #[serde(default)]
+                    tint: Option<WidgetColor>,
+                    #[serde(default)]
+                    accented_mode: WidgetAccentedImageMode,
+                    #[serde(default)]
+                    style: WidgetBoxStyle,
+                    #[serde(default)]
+                    layout: WidgetLayout,
+                }
+                let v: ImageIn = serde_json::from_value(obj).map_err(err)?;
+                Ok(Self::Image {
+                    source: v.source,
+                    resize_mode: v.resize_mode,
+                    tint: v.tint,
+                    accented_mode: v.accented_mode,
+                    style: v.style,
+                    layout: v.layout,
+                })
+            }
+            "progress" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct ProgressIn {
+                    value: f32,
+                    #[serde(default)]
+                    track_color: Option<WidgetColor>,
+                    #[serde(default)]
+                    indicator_color: Option<WidgetColor>,
+                    #[serde(default)]
+                    corner_radius: Option<Points>,
+                    #[serde(default)]
+                    layout: WidgetLayout,
+                }
+                let v: ProgressIn = serde_json::from_value(obj).map_err(err)?;
+                Ok(Self::Progress {
+                    value: v.value,
+                    track_color: v.track_color,
+                    indicator_color: v.indicator_color,
+                    corner_radius: v.corner_radius,
+                    layout: v.layout,
+                })
+            }
+            "link" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct LinkIn {
+                    href: String,
+                    #[serde(default)]
+                    accessibility_label: Option<String>,
+                    child: Box<WidgetNode>,
+                }
+                let v: LinkIn = serde_json::from_value(obj).map_err(err)?;
+                Ok(Self::Link {
+                    href: v.href,
+                    accessibility_label: v.accessibility_label,
+                    child: v.child,
+                })
+            }
+            "action" => {
+                #[derive(Deserialize)]
+                #[serde(rename_all = "camelCase")]
+                struct ActionIn {
+                    action: String,
+                    #[serde(default)]
+                    payload_json: Option<String>,
+                    #[serde(default)]
+                    patch_json: Option<String>,
+                    #[serde(default)]
+                    accessibility_label: Option<String>,
+                    child: Box<WidgetNode>,
+                }
+                let v: ActionIn = serde_json::from_value(obj).map_err(err)?;
+                Ok(Self::Action {
+                    action: v.action,
+                    payload_json: v.payload_json,
+                    patch_json: v.patch_json,
+                    accessibility_label: v.accessibility_label,
+                    child: v.child,
+                })
+            }
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["box", "text", "date", "image", "progress", "link", "action"],
+            )),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -13,6 +13,9 @@ pub(crate) struct SystemConfig {
     /// Read by QuickJS's host only: nothing updates on the web (`nsh/updater`).
     #[cfg_attr(not(feature = "js-core"), allow(dead_code))]
     pub(crate) updater: Option<std::sync::Arc<dyn nsh_core::runtime::UpdaterHost>>,
+    /// What `nsh/widget` runs on; `None`: widgets are unavailable.
+    #[cfg_attr(not(feature = "js-core"), allow(dead_code))]
+    pub(crate) widget: Option<std::sync::Arc<dyn nsh_core::widget::WidgetHost>>,
     /// The core's address, which every VM reads (`UrlScheme.url()`).
     pub(crate) app_url: nsh_core::url_scheme::AppUrlCell,
     pub(crate) data_dir: Option<std::path::PathBuf>,
@@ -122,6 +125,7 @@ mod imp {
             host.set_refuse_connections(system.refuse_connections);
             host.set_filesystem(system.filesystem);
             host.set_updater(system.updater);
+            host.set_widget(system.widget);
             host.set_app_url(system.app_url);
             host.set_system_wake(system.wake);
             host.set_host_bridge(system.host);

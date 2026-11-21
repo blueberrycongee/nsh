@@ -47,6 +47,7 @@ fn start(root: Root) -> (Engine, Receiver<MountBatch>) {
         audio: None,
         windows: None,
         login_item: None,
+        widget: None,
         data_dir: None,
     };
     (
@@ -419,6 +420,7 @@ fn start_js(app: &str) -> (Engine, Receiver<MountBatch>) {
         audio: None,
         windows: None,
         login_item: None,
+        widget: None,
         data_dir: None,
     };
     (

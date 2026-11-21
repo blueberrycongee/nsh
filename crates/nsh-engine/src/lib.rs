@@ -36,6 +36,8 @@ mod storage;
 mod symbolicate;
 #[cfg(all(feature = "js-core", not(target_arch = "wasm32")))]
 pub mod updates;
+#[cfg(all(feature = "js-core", not(target_arch = "wasm32")))]
+pub mod widget;
 
 // The typed API check (docs/dev/geometry.md, "Typed API"): the scan is
 // nsh-core's; this crate's lists are `unitless.txt` and `untyped.txt`.
@@ -1237,6 +1239,8 @@ pub struct EngineConfig {
     /// `login_item` option), or a test's fake. `None` (the default): the
     /// app does not launch at login.
     pub login_item: Option<Arc<dyn nsh_core::desktop::LoginItemBackend>>,
+    /// What `nsh/widget` runs on; `None`: native widgets are unavailable.
+    pub widget: Option<Arc<dyn nsh_core::widget::WidgetHost>>,
 }
 
 /// Values of the environment an engine keeps whatever its platform reports
@@ -1375,6 +1379,7 @@ impl EngineConfig {
             audio: None,
             windows: None,
             login_item: None,
+            widget: None,
         }
     }
 
@@ -2630,6 +2635,7 @@ impl<M: TextEngine + 'static> Driver<M> {
                             config.assets.clone(),
                             bundle,
                         ),
+                        widget: config.widget.clone(),
                         app_url: app_url.clone(),
                         data_dir: data_dir(&config),
                         paths: bundle_system_paths(bundle),

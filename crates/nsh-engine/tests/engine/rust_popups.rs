@@ -62,6 +62,7 @@ fn config(app: App) -> EngineConfig {
         audio: None,
         windows: None,
         login_item: None,
+        widget: None,
         data_dir: None,
     }
 }

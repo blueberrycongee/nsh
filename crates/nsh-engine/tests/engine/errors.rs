@@ -60,6 +60,7 @@ fn config(bundle: Bundle, limits: nsh_engine::Limits) -> EngineConfig {
         audio: None,
         windows: None,
         login_item: None,
+        widget: None,
         data_dir: None,
     }
 }
@@ -151,6 +152,7 @@ fn first_error(bundle: Bundle) -> String {
         audio: None,
         windows: None,
         login_item: None,
+        widget: None,
         data_dir: None,
     };
     let _engine = Engine::start(config, || ApproxTextEngine, sink).unwrap();

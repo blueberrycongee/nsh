@@ -480,6 +480,7 @@ impl AppView {
             audio: None,
             windows: None,
             login_item: self.login_item(&options),
+            widget: None,
         };
         crate::image::set_asset_base(&self.surface, options.asset_base.clone());
         self.surface

@@ -115,6 +115,7 @@ fn start_app(name: &str, app: &str) -> (Engine, Receiver<MountBatch>) {
         audio: None,
         windows: None,
         login_item: None,
+        widget: None,
         data_dir: None,
     };
     (

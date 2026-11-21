@@ -84,6 +84,7 @@ mount(() => <Text>{{shown()}}</Text>);
             filesystem: None,
             windows: None,
             login_item: None,
+            widget: None,
             assets: None,
             environment: Environment {
                 os: Os::Linux,

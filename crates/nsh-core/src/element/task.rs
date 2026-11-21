@@ -179,6 +179,10 @@ pub(crate) enum Action {
     NextSecondInstance(AnswerSlot<crate::single_instance::SecondInstance>),
     /// The next interactive widget action ([`crate::widget::WidgetActionEvent`])
     /// resolves the slot, queued offline actions first.
+    #[allow(
+        clippy::enum_variant_names,
+        reason = "matches the public `WidgetActionEvent` / `next_widget_action` vocabulary"
+    )]
     NextWidgetAction(AnswerSlot<crate::widget::WidgetActionEvent>),
     /// The next address move the app did not make
     /// ([`crate::url_scheme::AppUrlChange`]) resolves the slot.

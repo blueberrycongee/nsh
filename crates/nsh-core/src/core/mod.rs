@@ -25,6 +25,7 @@ mod touch;
 mod views;
 mod watch;
 mod web_evaluation;
+mod widget;
 
 /// The most network image checks [`Core`] remembers for its canvases; past
 /// it, it starts over.
@@ -39,10 +40,13 @@ use std::{rc::Rc, sync::Arc};
 use slab::Slab;
 use taffy::{AvailableSpace, NodeId as LayoutId, Overflow, Position};
 
-pub use self::measure::{ListScrollPosition, Measurement};
 use self::{
     layout_tree::LayoutTree,
     list::{ExtraKind, Follow, ListState, PendingScroll, PinTarget},
+};
+pub use self::{
+    measure::{ListScrollPosition, Measurement},
+    widget::WidgetAppearanceCapture,
 };
 use crate::{
     animation::AnimationProp,

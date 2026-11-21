@@ -733,6 +733,16 @@ impl Host {
         *self.shared.system_widget.borrow_mut() = widget;
     }
 
+    /// Reads a string property from `globalThis` (`None` if missing or not a
+    /// string).
+    pub fn global_string(&self, name: &str) -> Option<String> {
+        if !self.cx.is_live() {
+            return None;
+        }
+        self.cx
+            .with(|ctx| ctx.globals().get::<_, Option<String>>(name).ok().flatten())
+    }
+
     /// Shares the core's address with the VM's modules (`UrlScheme.url()`).
     pub fn set_app_url(&self, app_url: nsh_core::url_scheme::AppUrlCell) {
         *self.shared.system_app_url.borrow_mut() = app_url;

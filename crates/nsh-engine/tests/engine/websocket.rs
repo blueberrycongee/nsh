@@ -82,6 +82,7 @@ mount(() => <Text>{{shown()}}</Text>);
         audio: None,
         windows: None,
         login_item: None,
+        widget: None,
         data_dir: None,
     };
     (

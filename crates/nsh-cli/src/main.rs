@@ -37,6 +37,7 @@ mod test_web;
 mod ui;
 mod updater;
 mod web;
+mod widget_preview;
 mod windows;
 
 use std::{
@@ -264,6 +265,11 @@ enum Command {
         /// Serve hot reload to hosts you start yourself.
         #[arg(long, conflicts_with_all = ["target", "device"])]
         server_only: bool,
+        /// Preview a widget declared in `nsh.json` `"widgets"` in an interactive
+        /// live preview harness with Light/Dark/Tinted/Unfocused toggles and HMR.
+        /// Omit the id to preview the first declared widget.
+        #[arg(long, value_name = "ID", num_args = 0..=1, default_missing_value = "")]
+        widget: Option<String>,
     },
     /// Package an installable app from the prebuilt runtime (no Rust
     /// needed). Metadata comes from `nsh.json` next to the entry, overridden
@@ -330,6 +336,11 @@ enum Command {
         /// main one when there is no such display (`--target macos` only).
         #[arg(long, value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
         display: Option<u32>,
+        /// Preview a widget declared in `nsh.json` `"widgets"` in an interactive
+        /// live preview harness with Light/Dark/Tinted/Unfocused toggles and HMR.
+        /// Omit the id to preview the first declared widget.
+        #[arg(long, value_name = "ID", num_args = 0..=1, default_missing_value = "")]
+        widget: Option<String>,
     },
     /// Create a signing key: `<name>.secret` (keep it offline for a root)
     /// and `<name>.pub` (what apps trust, for a root).
@@ -1003,8 +1014,13 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             target,
             device,
             server_only,
+            widget,
         } => {
             no_limits_for_rust(&entry, limits)?;
+            let entry = match widget {
+                Some(id) => widget_preview::prepare_preview_entry(&entry, &id)?,
+                None => entry,
+            };
             // `--server-only` serves hosts started elsewhere, on other
             // machines too; a host `nsh dev` starts is on the network only
             // as `nsh run` starts it.
@@ -1097,8 +1113,13 @@ fn dispatch(command: Command) -> anyhow::Result<()> {
             size,
             display,
             points_per_cell,
+            widget,
         } => {
             no_limits_for_rust(&entry, limits)?;
+            let entry = match widget {
+                Some(id) => widget_preview::prepare_preview_entry(&entry, &id)?,
+                None => entry,
+            };
             run::run(
                 &entry,
                 dev::Listen {
