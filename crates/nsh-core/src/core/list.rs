@@ -3605,6 +3605,25 @@ mod tests {
     }
 
     #[test]
+    fn shown_offsets_replay_only_instant_pending_scrolls_in_order() {
+        let pending = vec![
+            (1, PendingScroll::By(20.0)),
+            (2, PendingScroll::To {
+                offset: 700.0,
+                animated: false,
+            }),
+            (3, PendingScroll::By(5.0)),
+            (4, PendingScroll::To {
+                offset: 900.0,
+                animated: true,
+            }),
+            (5, PendingScroll::By(30.0)),
+        ];
+        assert_eq!(replay(100.0, &pending), 930.0);
+        assert_eq!(replay_shown(100.0, &pending), 735.0);
+    }
+
+    #[test]
     fn an_animated_pin_ends_when_the_list_moves_away_from_it() {
         let mut l = list(100, 50.0, 400.0);
         l.pin(Some(PinTarget::End), 4600.0, true);
