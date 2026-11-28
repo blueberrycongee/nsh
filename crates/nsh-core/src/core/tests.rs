@@ -5134,6 +5134,147 @@ fn follow_end_animated_stops_when_the_user_scrolls_away() {
     assert_eq!(last_row_resized(&mut c, last, 450.0), (vec![], vec![]));
 }
 
+/// A resize that moves the end of a list following it moves the rows on
+/// screen with the same commit. Measurement and anchored overlays read the
+/// coordinates of that commit, not the offset the platform had before the
+/// anchoring scroll it applies with the batch.
+#[test]
+fn measuring_a_list_row_follows_its_resize_anchor() {
+    let mut c = core();
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::List,
+            },
+            style_op(2, &[("flexGrow", StyleValue::Number(1.0))]),
+            Op::SetProp {
+                id: 2,
+                prop: Prop::EstimatedItemSize(px(50.0)),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::FollowEnd(Some(px(80.0)), false),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::Count(100),
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+        ],
+    );
+    c.commit();
+    let (mut next_id, mut cells) = (100, Vec::new());
+    render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+    c.commit();
+    c.apply(Op::Command {
+        id: 2,
+        command: Command::ScrollToEnd { animated: false },
+    })
+    .unwrap();
+    let mut at = scrolled(&c.commit().unwrap(), 0.0);
+    for _ in 0..4 {
+        render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+        if let Some(batch) = c.commit() {
+            at = scrolled(&batch, at);
+        }
+    }
+    c.set_scroll_offset(2, point(px(0.0), px(at)), u32::MAX);
+    c.commit();
+    assert_eq!(at, 100.0 * 50.0 - 480.0, "at the end");
+    let last = *cells
+        .iter()
+        .max_by(|&&a, &&b| {
+            let y = |id| c.nodes[c.key(id).unwrap() as usize].frame.origin.y.0;
+            y(a).total_cmp(&y(b))
+        })
+        .unwrap();
+    let before = c.measure(last).unwrap().page.y.0;
+
+    // An overlay anchored to the row reads the same coordinates.
+    add(&mut c, 900, Tag::Overlay, last, &[]);
+    add(
+        &mut c,
+        901,
+        Tag::View,
+        900,
+        &[
+            ("width", StyleValue::Number(120.0)),
+            ("height", StyleValue::Number(60.0)),
+        ],
+    );
+    apply(
+        &mut c,
+        vec![
+            overlay_prop(
+                900,
+                crate::OverlayProp::Anchor(crate::overlay::OverlayAnchor::Node(last)),
+            ),
+            overlay_prop(
+                900,
+                crate::OverlayProp::Placement(crate::overlay::Placement::Top),
+            ),
+            overlay_prop(900, crate::OverlayProp::Offset(px(4.0))),
+        ],
+    );
+    let batch = c.commit().expect("the overlay");
+    let overlay_before = frame_of(&batch, 900).unwrap().origin.y.0;
+    assert_eq!(overlay_before, before - 60.0 - 4.0);
+
+    c.apply(Op::Command {
+        id: last,
+        command: Command::Measure { call: 7 },
+    })
+    .unwrap();
+    c.set_viewport(size_pt(320.0, 300.0));
+    let batch = c.commit().expect("the resize");
+    let scroll_by: f32 = batch
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            MountItem::ScrollBy { id: 2, dy, .. } => Some(dy.0),
+            _ => None,
+        })
+        .sum();
+    assert_eq!(scroll_by, 180.0, "the shorter viewport moves the end");
+    let frame_y = c.nodes[c.key(last).unwrap() as usize].frame.origin.y.0;
+    // The batch grows the scroll offset by 180 before the platform reports
+    // it: the row is 180 points higher in the coordinates the commit mounts.
+    assert_eq!(
+        c.measure(last).unwrap().page.y.0,
+        frame_y - (at + scroll_by)
+    );
+    assert_eq!(c.measure(last).unwrap().page.y.0, before - scroll_by);
+    let answered = js_events(&mut c)
+        .into_iter()
+        .find_map(|(_, _, payload)| match payload {
+            EventPayload::Native { name, data } if &*name == "$return" && data["c"] == 7 => {
+                Some(data["v"].clone())
+            }
+            _ => None,
+        })
+        .expect("the measure answer");
+    assert_eq!(
+        answered["pagePosition"]["y"],
+        serde_json::json!(before - scroll_by),
+        "ref.measure() answers with the batch's coordinates"
+    );
+    assert_eq!(
+        frame_of(&batch, 900).unwrap().origin.y.0,
+        overlay_before - scroll_by,
+        "the anchored overlay follows the row in the same batch"
+    );
+
+    // Once the platform's report arrives the answer is unchanged.
+    c.set_scroll_offset(2, point(px(0.0), px(at + scroll_by)), u32::MAX);
+    assert_eq!(c.measure(last).unwrap().page.y.0, before - scroll_by);
+}
+
 #[test]
 fn scroll_commands_follow_their_target_as_rows_are_measured() {
     let mut c = core();

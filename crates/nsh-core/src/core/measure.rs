@@ -391,10 +391,23 @@ impl<M: TextEngine> Core<M> {
             if parent == NO_KEY {
                 break;
             }
-            // In a scroll view's content: where the content is now.
+            // In a scroll view's content: where the content is now. A list
+            // of its own counts the instant scrolls of this commit at once
+            // (`ListState::offset`): the platform applies them with the
+            // batch these coordinates describe, while its report of the
+            // offset they came from is still on its way back.
             if let Some(scroll) = self.nodes[parent as usize].scroll.as_deref() {
-                x = x * scroll.zoom - scroll.offset.0;
-                y = y * scroll.zoom - scroll.offset.1;
+                let list = self.nodes[parent as usize]
+                    .list
+                    .as_ref()
+                    .filter(|list| !list.parent);
+                let (sx, sy) = match (list, scroll.horizontal) {
+                    (Some(list), false) => (scroll.offset.0, list.offset),
+                    (Some(list), true) => (list.offset, scroll.offset.1),
+                    _ => scroll.offset,
+                };
+                x = x * scroll.zoom - sx;
+                y = y * scroll.zoom - sy;
             }
             k = parent;
         }
