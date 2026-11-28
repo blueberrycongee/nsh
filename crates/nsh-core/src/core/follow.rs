@@ -217,7 +217,12 @@ impl<M: TextEngine> Core<M> {
             if let Some(scroll) = n.scroll.as_deref()
                 && !n.list.as_ref().is_some_and(|l| l.parent)
             {
-                frame = shown(frame, self.content_offset(k), scroll.zoom, n.frame.size)?;
+                frame = shown(
+                    frame,
+                    self.content_offset(scroll, n.list.as_deref()),
+                    scroll.zoom,
+                    n.frame.size,
+                )?;
             }
             frame.origin += n.frame.origin;
             k = n.parent;

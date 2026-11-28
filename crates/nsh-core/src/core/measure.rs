@@ -3,7 +3,7 @@
 //! outside their parents' bounds, which platforms hit-test
 //! ([`MountItem::Overflow`]).
 
-use super::{Core, Key, Kind, NO_KEY};
+use super::{Core, Key, Kind, NO_KEY, ScrollState, list::ListState};
 use crate::{
     EventPayload, JsonValue, PayloadValue,
     geometry::{Bounds, Point, Points, point, rect},
@@ -179,7 +179,7 @@ impl<M: TextEngine> Core<M> {
         }
         let inner = match node.scroll.as_deref() {
             Some(scroll) => {
-                let (sx, sy) = self.content_offset(key);
+                let (sx, sy) = self.content_offset(scroll, node.list.as_deref());
                 point(
                     Points((p.x.0 + sx) / scroll.zoom),
                     Points((p.y.0 + sy) / scroll.zoom),
@@ -356,22 +356,31 @@ impl<M: TextEngine> Core<M> {
         text
     }
 
-    /// The content offset scroll view `key` shows with this commit: the
-    /// platform's last report, plus the instant scrolls the core sent or
-    /// queued which that report does not count yet. An animated scroll not
-    /// applied yet has not moved the content; its movement is what the
-    /// platform reports while it runs. The cross axis is the reported one.
-    pub(super) fn content_offset(&self, key: Key) -> (f32, f32) {
-        let node = &self.nodes[key as usize];
-        let Some(scroll) = node.scroll.as_deref() else {
-            return (0.0, 0.0);
-        };
+    /// The content offset `scroll` shows with this commit: the platform's
+    /// last report, plus the instant scrolls the core sent or queued which
+    /// that report does not count yet. An animated scroll not applied yet
+    /// has not moved the content; its movement is what the platform
+    /// reports while it runs. The cross axis is the reported one. `list`
+    /// is the node's own list (`None` for a plain scroll view).
+    pub(super) fn content_offset(
+        &self,
+        scroll: &ScrollState,
+        list: Option<&ListState>,
+    ) -> (f32, f32) {
+        // Nothing sent or queued is unreported: what shows is the report.
+        // A list keeps the scrolls it issued in its own `pending`.
+        if list.is_none_or(ListState::settled)
+            && scroll.asked.is_none()
+            && scroll.pending.is_empty()
+        {
+            return scroll.offset;
+        }
         let reported = if scroll.horizontal {
             scroll.offset.0
         } else {
             scroll.offset.1
         };
-        let shown = match node.list.as_ref().filter(|list| !list.parent) {
+        let shown = match list.filter(|list| !list.parent) {
             Some(list) => list.shown_offset(reported),
             None => super::list::replay_shown(reported, &scroll.pending),
         };
@@ -426,8 +435,9 @@ impl<M: TextEngine> Core<M> {
             }
             // In a scroll view's content: where the content shows with
             // this batch (`Core::content_offset`).
-            if let Some(scroll) = self.nodes[parent as usize].scroll.as_deref() {
-                let (sx, sy) = self.content_offset(parent);
+            let parent_node = &self.nodes[parent as usize];
+            if let Some(scroll) = parent_node.scroll.as_deref() {
+                let (sx, sy) = self.content_offset(scroll, parent_node.list.as_deref());
                 x = x * scroll.zoom - sx;
                 y = y * scroll.zoom - sy;
             }
