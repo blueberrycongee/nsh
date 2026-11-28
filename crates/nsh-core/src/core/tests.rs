@@ -5397,6 +5397,49 @@ fn measuring_a_list_row_does_not_jump_to_an_animated_scrolls_target() {
     );
 }
 
+/// Hit testing uses the same committed scroll position as measurement:
+/// an instant list scroll is inverted at once, including when a report
+/// made before it arrives afterwards.
+#[test]
+fn hit_testing_a_list_row_follows_its_instant_scroll() {
+    let mut c = core();
+    estimated_list(&mut c);
+    c.commit();
+    let (mut next_id, mut cells) = (100, Vec::new());
+    render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+    c.commit();
+    let row = cell_showing(&c, 2, 2);
+    apply(
+        &mut c,
+        vec![Op::Listen {
+            id: row,
+            event: EventKind::Press,
+            enabled: true,
+        }],
+    );
+    c.apply(Op::Command {
+        id: 2,
+        command: Command::ScrollTo {
+            x: Points::ZERO,
+            y: px(100.0),
+            animated: false,
+        },
+    })
+    .unwrap();
+    c.commit();
+    assert_eq!(c.measure(row).unwrap().page.y.0, 0.0);
+    assert_eq!(
+        c.press_target(2, point(px(10.0), px(25.0))),
+        Some((row, point(px(10.0), px(25.0))))
+    );
+    c.set_scroll_offset(2, point(px(0.0), px(0.0)), 0);
+    c.commit();
+    assert_eq!(
+        c.press_target(2, point(px(10.0), px(25.0))),
+        Some((row, point(px(10.0), px(25.0))))
+    );
+}
+
 #[test]
 fn scroll_commands_follow_their_target_as_rows_are_measured() {
     let mut c = core();
