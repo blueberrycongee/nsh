@@ -58066,3 +58066,105 @@ fn a_tab_bar_makes_every_tab_added_in_one_turn_over_frames() {
         }
     }
 }
+
+/// `cargo test -p nsh-core --release bench_measure_list_row -- --ignored --nocapture`
+///
+/// The coordinate conversion of a row inside a virtualized list, once with
+/// no scrolls in flight and once with an instant scroll's report still
+/// outstanding. Compile it on both sides of a measurement change and
+/// alternate the runs.
+#[test]
+#[ignore]
+fn bench_measure_list_row() {
+    use std::{hint::black_box, time::Instant};
+
+    let mut c = core();
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::List,
+            },
+            style_op(2, &[("flexGrow", StyleValue::Number(1.0))]),
+            Op::SetProp {
+                id: 2,
+                prop: Prop::EstimatedItemSize(px(50.0)),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::FollowEnd(Some(px(80.0)), false),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::Count(100),
+            },
+            Op::Insert {
+                parent: ROOT_ID,
+                child: 2,
+                before: None,
+            },
+        ],
+    );
+    c.commit();
+    let (mut next_id, mut cells) = (100, Vec::new());
+    render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+    c.commit();
+    c.apply(Op::Command {
+        id: 2,
+        command: Command::ScrollToEnd { animated: false },
+    })
+    .unwrap();
+    let mut at = scrolled(&c.commit().unwrap(), 0.0);
+    for _ in 0..4 {
+        render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+        if let Some(batch) = c.commit() {
+            at = scrolled(&batch, at);
+        }
+    }
+    c.set_scroll_offset(2, point(px(0.0), px(at)), u32::MAX);
+    c.commit();
+    let last = *cells
+        .iter()
+        .max_by(|&&a, &&b| {
+            let y = |id| c.nodes[c.key(id).unwrap() as usize].frame.origin.y.0;
+            y(a).total_cmp(&y(b))
+        })
+        .unwrap();
+    assert!(c.measure(last).is_some(), "the row is placed");
+
+    let iterations = 200_000u32;
+    let run = |c: &Core<FakeEngine>, label: &str| {
+        let mut samples = [std::time::Duration::ZERO; 7];
+        for sample in &mut samples {
+            let start = Instant::now();
+            for _ in 0..iterations {
+                black_box(black_box(c).measure(black_box(last)));
+            }
+            *sample = start.elapsed() / iterations;
+        }
+        samples.sort_unstable();
+        eprintln!(
+            "measure {label}: min / median {} / {} ns",
+            samples[0].as_nanos(),
+            samples[3].as_nanos(),
+        );
+    };
+
+    // Steady state: every scroll's report is in, nothing pending.
+    run(&c, "settled");
+
+    // An instant scroll whose report is still in flight: the window the
+    // shown-offset pipeline serves.
+    c.apply(Op::Command {
+        id: 2,
+        command: Command::ScrollTo {
+            x: px(0.0),
+            y: px(0.0),
+            animated: false,
+        },
+    })
+    .unwrap();
+    c.commit();
+    run(&c, "in-flight");
+}
