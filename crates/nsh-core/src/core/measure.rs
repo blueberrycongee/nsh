@@ -353,6 +353,36 @@ impl<M: TextEngine> Core<M> {
         text
     }
 
+    /// The content offset scroll view `key` shows with this commit: the
+    /// platform's last report, plus the instant scrolls the core sent or
+    /// queued which that report does not count yet. An animated scroll not
+    /// applied yet has not moved the content; its movement is what the
+    /// platform reports while it runs. The cross axis is the reported one.
+    pub(super) fn content_offset(&self, key: Key) -> (f32, f32) {
+        let node = &self.nodes[key as usize];
+        let Some(scroll) = node.scroll.as_deref() else {
+            return (0.0, 0.0);
+        };
+        let reported = if scroll.horizontal {
+            scroll.offset.0
+        } else {
+            scroll.offset.1
+        };
+        let shown = match node.list.as_ref().filter(|list| !list.parent) {
+            Some(list) => list.shown_offset(reported),
+            None => super::list::replay_shown(reported, &scroll.pending),
+        };
+        let shown = scroll
+            .asked
+            .as_ref()
+            .map_or(shown, |asked| asked.shown(shown));
+        if scroll.horizontal {
+            (shown, scroll.offset.1)
+        } else {
+            (scroll.offset.0, shown)
+        }
+    }
+
     /// Where view `id` is, from the last layout; `None` when it is not in
     /// the tree or was never laid out.
     pub fn measure(&self, id: NodeId) -> Option<Measurement> {
@@ -391,21 +421,10 @@ impl<M: TextEngine> Core<M> {
             if parent == NO_KEY {
                 break;
             }
-            // In a scroll view's content: where the content is now. A list
-            // of its own counts the instant scrolls of this commit at once
-            // (`ListState::offset`): the platform applies them with the
-            // batch these coordinates describe, while its report of the
-            // offset they came from is still on its way back.
+            // In a scroll view's content: where the content shows with
+            // this batch (`Core::content_offset`).
             if let Some(scroll) = self.nodes[parent as usize].scroll.as_deref() {
-                let list = self.nodes[parent as usize]
-                    .list
-                    .as_ref()
-                    .filter(|list| !list.parent);
-                let (sx, sy) = match (list, scroll.horizontal) {
-                    (Some(list), false) => (scroll.offset.0, list.offset),
-                    (Some(list), true) => (list.offset, scroll.offset.1),
-                    _ => scroll.offset,
-                };
+                let (sx, sy) = self.content_offset(parent);
                 x = x * scroll.zoom - sx;
                 y = y * scroll.zoom - sy;
             }
