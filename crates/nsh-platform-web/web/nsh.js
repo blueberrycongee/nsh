@@ -147,11 +147,34 @@ const BAR_GRAB = 12;
 const BAR_HOLD = 700;
 /** How long (ms) an animated scroll command of the core's takes here, the
  * length its own animation runs for on the other platforms (`nsh-core`'s
- * `scroll::ANIMATION`, eased out cubically): the browser's
+ * `scroll::ANIMATION`, critically damped spring): the browser's
  * `behavior: "smooth"` takes about a second over a long distance, and
  * starts over every time a command retargets it, which a list does as it
  * measures the rows the scroll passes. */
 const SCROLL_MS = 300;
+/** Critically damped spring stiffness factor matching `nsh_core::scroll::SPRING_K`. */
+const SCROLL_SPRING_K = 7.2;
+
+/**
+ * Evaluates a critically damped spring (`zeta = 1`) from `from` to `to` with
+ * initial velocity `velocity` (px/ms) at `elapsed` ms of `duration` ms.
+ * Returns `[position, velocity]` and caps overspeed toward `to` so retargets
+ * never overshoot.
+ */
+function scrollSpringStep(from, to, velocity, elapsed, duration) {
+  if (!(duration > 0) || elapsed >= duration) return [to, 0];
+  const t = Math.max(elapsed, 0);
+  const omega = SCROLL_SPRING_K / duration;
+  const e0 = from - to;
+  let v0 = velocity;
+  if (e0 > 0 && v0 < -omega * e0) v0 = -omega * e0;
+  else if (e0 < 0 && v0 > -omega * e0) v0 = -omega * e0;
+  const c2 = v0 + omega * e0;
+  const decay = Math.exp(-omega * t);
+  const pos = to + (e0 + c2 * t) * decay;
+  const vel = (c2 - omega * (e0 + c2 * t)) * decay;
+  return [pos, vel];
+}
 
 /* Keyframe animations (animate-spin, -ping, -pulse, -bounce) run with
    animation-composition: add: their transforms follow the view's own (as the
@@ -10209,22 +10232,30 @@ class Player {
     this.animateScroll(el, x, y);
   }
 
-  /** Moves `el` to (`x`, `y`) over `SCROLL_MS`, eased out cubically, as
-   * the core animates a scroll of its own on the other platforms. A
-   * command that retargets one in flight carries on from where it is, as
-   * the core's `animate_to` does. */
+  /** Moves `el` to (`x`, `y`) over `SCROLL_MS` on a critically damped spring
+   * (zero overshoot), as the native backends animate a scroll of their own. A
+   * command that retargets one in flight inherits its live velocity so bursts
+   * merge into one continuous motion. */
   animateScroll(el, x, y) {
+    const now = performance.now();
     let a = el._smooth;
+    let vx = 0, vy = 0;
     if (!a) {
-      a = el._smooth = { fromX: 0, fromY: 0, x: 0, y: 0, start: 0, frame: 0, step: null, watch: 0 };
-      a.step = (now) => this.stepScroll(el, a, now);
+      a = el._smooth = { fromX: 0, fromY: 0, vx: 0, vy: 0, x: 0, y: 0, start: 0, frame: 0, step: null, watch: 0 };
+      a.step = (t) => this.stepScroll(el, a, t);
       this.drive(el, 1);
+    } else {
+      const elapsed = Math.max(now - a.start, 0);
+      vx = scrollSpringStep(a.fromX, a.x, a.vx, elapsed, SCROLL_MS)[1];
+      vy = scrollSpringStep(a.fromY, a.y, a.vy, elapsed, SCROLL_MS)[1];
     }
     a.fromX = el.scrollLeft;
     a.fromY = el.scrollTop;
+    a.vx = vx;
+    a.vy = vy;
     a.x = x;
     a.y = y;
-    a.start = performance.now();
+    a.start = now;
     // Its frames stopped (a hidden tab): it is where it was going, and
     // ends there, as a glide's do (`scrollSmoothly`). One timer an
     // animation, not one a frame.
@@ -10239,14 +10270,15 @@ class Player {
 
   /** One frame of `el`'s scroll animation (`animateScroll`). */
   stepScroll(el, a, now) {
-    const t = Math.min((now - a.start) / SCROLL_MS, 1);
-    const k = 1 - (1 - t) ** 3;
-    el.scrollLeft = a.fromX + (a.x - a.fromX) * k;
-    el.scrollTop = a.fromY + (a.y - a.fromY) * k;
-    if (t < 1) {
+    const elapsed = Math.max(now - a.start, 0);
+    if (elapsed < SCROLL_MS) {
+      el.scrollLeft = scrollSpringStep(a.fromX, a.x, a.vx, elapsed, SCROLL_MS)[0];
+      el.scrollTop = scrollSpringStep(a.fromY, a.y, a.vy, elapsed, SCROLL_MS)[0];
       a.frame = requestAnimationFrame(a.step);
       return;
     }
+    el.scrollLeft = a.x;
+    el.scrollTop = a.y;
     a.frame = 0;
     this.endScrollAnimation(el, true);
   }

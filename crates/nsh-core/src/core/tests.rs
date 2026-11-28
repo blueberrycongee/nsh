@@ -5005,6 +5005,13 @@ fn follow_end_keeps_its_place_while_the_last_row_reveals() {
 /// List 2 (follow_end 80 pt, `animated` as given) at its end with 100
 /// rows of 50 pt; returns the core and the cell showing the last row.
 fn list_following_its_end(animated: bool) -> (Core<FakeEngine>, u32) {
+    let (c, last, _, _) = list_following_its_end_cells(animated);
+    (c, last)
+}
+
+/// [`list_following_its_end`] also returning `(next_id, cells)` so tests can
+/// bind additional rows onto the same slot pool.
+fn list_following_its_end_cells(animated: bool) -> (Core<FakeEngine>, u32, u32, Vec<u32>) {
     let mut c = core();
     estimated_list(&mut c);
     apply(
@@ -5040,7 +5047,7 @@ fn list_following_its_end(animated: bool) -> (Core<FakeEngine>, u32) {
             y(a).total_cmp(&y(b))
         })
         .unwrap();
-    (c, last)
+    (c, last, next_id, cells)
 }
 
 /// List 2's scrolls in the commit after the last row (`cell`) becomes
@@ -5132,6 +5139,215 @@ fn follow_end_animated_stops_when_the_user_scrolls_away() {
     c.set_scroll_offset(2, point(px(0.0), px(end - 200.0)), u32::MAX);
     c.commit();
     assert_eq!(last_row_resized(&mut c, last, 450.0), (vec![], vec![]));
+}
+
+/// Appends one row of `height` to list 2 (already at `count` rows), binds its
+/// cell as JS does, and returns the list's `ScrollTo` commands and `ScrollBy`
+/// items across the append + measure commits.
+fn append_row(
+    c: &mut Core<FakeEngine>,
+    count: u32,
+    next_id: &mut u32,
+    cells: &mut Vec<u32>,
+    height: f32,
+) -> (Vec<(f32, bool)>, Vec<f32>, Vec<MountItem>) {
+    apply(
+        c,
+        vec![
+            Op::SetProp {
+                id: 2,
+                prop: Prop::Splice(count, 0, 1),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::Count(count + 1),
+            },
+        ],
+    );
+    let mut to = Vec::new();
+    let mut by = Vec::new();
+    let mut all = Vec::new();
+    let mut collect = |batch: Option<MountBatch>| {
+        for item in batch.map(|b| b.items).unwrap_or_default() {
+            match item {
+                MountItem::Command {
+                    id: 2,
+                    command: Command::ScrollTo { y, animated, .. },
+                } => to.push((y.0, animated)),
+                MountItem::ScrollBy { id: 2, dy, .. } => by.push(dy.0),
+                _ => {}
+            }
+            all.push(item);
+        }
+    };
+    collect(c.commit());
+    render_sized_binds(
+        c,
+        next_id,
+        cells,
+        &|index| if index == count { height } else { 50.0 },
+        usize::MAX,
+    );
+    collect(c.commit());
+    (to, by, all)
+}
+
+#[test]
+fn follow_end_animated_keeps_pin_across_burst_appends() {
+    // Three rapid 38pt chat sends while each previous animated scroll is still
+    // in flight: splicing at the end must preserve the animating End pin so
+    // every message retargets smoothly to the new end without losing follow.
+    let (mut c, _, mut next_id, mut cells) = list_following_its_end_cells(true);
+    let base_end = 100.0 * 50.0 - 400.0;
+
+    // Send #1 (38pt bubble): waits for measurement, then emits one animated
+    // ScrollTo the exact new end (no estimated ScrollBy jump).
+    let (to1, by1, _) = append_row(&mut c, 100, &mut next_id, &mut cells, 38.0);
+    assert!(
+        by1.is_empty(),
+        "must not jump by estimate or ScrollBy: {by1:?}"
+    );
+    assert_eq!(to1, vec![(base_end + 38.0, true)]);
+
+    // Mid-flight (offset still near base_end): Send #2 arrives (38pt).
+    c.set_scroll_offset(2, point(px(0.0), px(base_end + 12.0)), u32::MAX);
+    c.commit();
+    let (to2, by2, _) = append_row(&mut c, 101, &mut next_id, &mut cells, 38.0);
+    assert!(by2.is_empty(), "{by2:?}");
+    assert_eq!(to2, vec![(base_end + 76.0, true)]);
+
+    // Mid-flight again (distance > threshold 80 if a taller burst lands):
+    // Send #3 arrives (120pt) while offset is still 100pt behind.
+    c.set_scroll_offset(2, point(px(0.0), px(base_end + 20.0)), u32::MAX);
+    c.commit();
+    let (to3, by3, _) = append_row(&mut c, 102, &mut next_id, &mut cells, 120.0);
+    assert!(by3.is_empty(), "{by3:?}");
+    assert_eq!(to3, vec![(base_end + 196.0, true)]);
+
+    // Once the animation lands at the final end, bottom-follow is still active.
+    c.set_scroll_offset(2, point(px(0.0), px(base_end + 196.0)), u32::MAX);
+    c.commit();
+    let (to4, by4, _) = append_row(&mut c, 103, &mut next_id, &mut cells, 42.0);
+    assert!(by4.is_empty(), "{by4:?}");
+    assert_eq!(to4, vec![(base_end + 238.0, true)]);
+}
+
+#[test]
+fn follow_end_re_enabled_does_not_lose_the_end() {
+    // Toggling `maintainVisibleContentPosition` off and back on (or changing
+    // its threshold) on an already-laid-out list at the end must still follow
+    // growth in the same commit instead of resetting `anchored_end` to NaN.
+    let (mut c, last) = list_following_its_end(false);
+    let end = 100.0 * 50.0 - 400.0;
+    apply(
+        &mut c,
+        vec![Op::SetProp {
+            id: 2,
+            prop: Prop::FollowEnd(None, false),
+        }],
+    );
+    c.commit();
+    // Re-enable and grow in the same commit while still at the end.
+    apply(
+        &mut c,
+        vec![
+            Op::SetProp {
+                id: 2,
+                prop: Prop::FollowEnd(Some(px(80.0)), false),
+            },
+            style_op(last, &[("height", StyleValue::Number(110.0))]),
+        ],
+    );
+    let batch = c.commit().unwrap();
+    assert_eq!(scrolled(&batch, end), end + 60.0);
+}
+
+#[test]
+fn follow_end_animated_animates_short_row_append_while_streaming_stays_immediate() {
+    let (mut c, last, mut next_id, mut cells) = list_following_its_end_cells(true);
+    let base_end = 100.0 * 50.0 - 400.0;
+    // Streaming text into an existing last row (+20pt) still follows immediately.
+    assert_eq!(last_row_resized(&mut c, last, 70.0), (vec![], vec![20.0]));
+    c.set_scroll_offset(2, point(px(0.0), px(base_end + 20.0)), u32::MAX);
+    c.commit();
+    // Appending a new 38pt single-line chat bubble animates smoothly instead of jumping.
+    let (to, by, _) = append_row(&mut c, 100, &mut next_id, &mut cells, 38.0);
+    assert!(by.is_empty(), "{by:?}");
+    assert_eq!(to, vec![(base_end + 58.0, true)]);
+}
+
+#[test]
+fn bottom_aligned_animated_list_slides_short_content_instead_of_jumping() {
+    // A bottom-aligned list shorter than its 400pt viewport (2 rows of 50pt:
+    // leading = 300pt) with `follow_end_animated`: appending a 38pt row keeps
+    // offset at 0 and smoothly animates the existing rows' frames upward while
+    // placing the new row directly at its final frame.
+    let mut c = core();
+    apply(
+        &mut c,
+        vec![
+            Op::Create {
+                id: 2,
+                tag: Tag::List,
+            },
+            style_op(2, &[("flexGrow", StyleValue::Number(1.0))]),
+            Op::SetProp {
+                id: 2,
+                prop: Prop::EstimatedItemSize(px(50.0)),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::ListAlignment(crate::ListAlignment::Bottom),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::FollowEnd(Some(px(48.0)), true),
+            },
+            Op::SetProp {
+                id: 2,
+                prop: Prop::Count(2),
+            },
+            Op::Insert {
+                parent: 1,
+                child: 2,
+                before: None,
+            },
+        ],
+    );
+    c.commit();
+    let (mut next_id, mut cells) = (100, Vec::new());
+    render_binds(&mut c, &mut next_id, &mut cells, 50.0);
+    c.commit();
+    let existing = cells.clone();
+
+    c.begin_mount_turn();
+    let (to, by, items) = append_row(&mut c, 2, &mut next_id, &mut cells, 38.0);
+    assert!(
+        to.is_empty() && by.is_empty(),
+        "short list stays at offset 0"
+    );
+    // The existing cells must receive a spring LayoutAnimation before their
+    // shifted target frames (y: 300 -> 262, 350 -> 312).
+    let mut active = None;
+    let mut animated_ids = Vec::new();
+    for item in &items {
+        match item {
+            MountItem::LayoutAnimation(la) => active = la.update,
+            MountItem::Frame { id, .. } if active.is_some() => animated_ids.push(*id),
+            _ => {}
+        }
+    }
+    for id in &existing {
+        assert!(
+            animated_ids.contains(id),
+            "existing cell {id} should slide upward under a layout animation, got {animated_ids:?}"
+        );
+    }
+    let new_cell = *cells.last().unwrap();
+    assert!(
+        !animated_ids.contains(&new_cell),
+        "newly appended cell {new_cell} must appear at its final frame without layout clipping"
+    );
 }
 
 #[test]

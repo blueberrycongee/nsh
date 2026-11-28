@@ -796,3 +796,43 @@ test('refresh spinner keeps turning while fading out on dismiss and clears on ne
   assert.ok(spinner.classList.has('nsh-gone') && !spinner.classList.has('spin'));
   assert.equal(spinner.style.opacity, '');
 });
+
+test('animated scroll retargets with continuous velocity and zero overshoot', (t) => {
+  t.mock.method(performance, 'now', () => clock);
+  const { p, el } = scroller();
+  p.op_cmd(['cmd', 1, 'scrollTo', 0, 120, true]);
+  const start = clock;
+  // Advance 5 frames (~83.5ms) and measure speed right before retargeting.
+  runFrames(4);
+  const prevY = el.scrollTop;
+  runFrames(1);
+  const yAt = el.scrollTop;
+  const vBefore = (yAt - prevY) / 16.7;
+  assert.ok(yAt > 40 && yAt < 120, `mid-flight y=${yAt}`);
+  assert.ok(vBefore > 0.2, `moving vBefore=${vBefore}`);
+
+  // Retarget to 240 while in flight: carries live velocity into the new spring.
+  p.op_cmd(['cmd', 1, 'scrollTo', 0, 240, true]);
+  assert.ok(el._smooth.vy > 0.1, `inherited velocity=${el._smooth.vy}`);
+  runFrames(1);
+  const yAfter = el.scrollTop;
+  const vAfter = (yAfter - yAt) / 16.7;
+  assert.ok(
+    Math.abs(vAfter - vBefore) < 0.35,
+    `continuous velocity: vBefore=${vBefore} vAfter=${vAfter}`
+  );
+
+  // Settles monotonically at 240 without overshoot.
+  let maxY = yAfter;
+  let lastY = yAfter;
+  for (let i = 0; i < 40 && el._smooth; i++) {
+    runFrames(1);
+    assert.ok(el.scrollTop >= lastY - 1e-4, `monotonic: ${lastY} -> ${el.scrollTop}`);
+    assert.ok(el.scrollTop <= 240 + 1e-4, `no overshoot: ${el.scrollTop}`);
+    lastY = el.scrollTop;
+    maxY = Math.max(maxY, el.scrollTop);
+  }
+  assert.equal(el.scrollTop, 240);
+  assert.equal(el._smooth, null);
+  assert.ok(clock - start > 300 && maxY <= 240 + 1e-4);
+});

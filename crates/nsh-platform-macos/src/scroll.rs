@@ -57,7 +57,7 @@ use nsh_core::{
     geometry::point,
     scroll::{
         ease_out, indicator_alpha, indicator_span_within, projected, rate, reveal_focus_delta,
-        snap_duration, sticky_shift, thumb_scroll, wheel_glide::Glide,
+        snap_duration, spring_step, sticky_shift, thumb_scroll, wheel_glide::Glide,
     },
 };
 use objc2::{MainThreadOnly, define_class, msg_send, rc::Retained};
@@ -230,12 +230,14 @@ enum Phase {
         duration: f64,
         momentum: bool,
     },
-    /// An eased move from `from` to `to`, started at `start` (ms):
-    /// `momentum` for snapping after a fling (momentum events), `end` to
-    /// send `onScrollEnd` when it arrives.
+    /// A critically damped spring move from `from` to `to`, started at `start`
+    /// (ms) with initial `velocity` (points per ms): `momentum` for snapping
+    /// after a fling (momentum events), `end` to send `onScrollEnd` when it
+    /// arrives.
     Animate {
         from: Offset,
         to: Offset,
+        velocity: Offset,
         start: f64,
         duration: f64,
         momentum: bool,
@@ -916,6 +918,35 @@ fn emit(surface: &Rc<Surface>, view: &NshView, kind: EventKind) {
     surface.event(id, kind, EventPayload::Scroll(point(Points(x), Points(y))));
 }
 
+/// Instantaneous velocity (points per ms) of a running animated scroll at
+/// `now`, or zero otherwise, so retargeting carries motion continuously.
+fn live_velocity(phase: Phase, now: f64) -> Offset {
+    match phase {
+        Phase::Animate {
+            from,
+            to,
+            velocity,
+            start,
+            duration,
+            ..
+        } => {
+            let elapsed = (now - start).max(0.0);
+            let (_, vx) = spring_step(Points(from.x), Points(to.x), velocity.x, elapsed, duration);
+            let (_, vy) = spring_step(Points(from.y), Points(to.y), velocity.y, elapsed, duration);
+            Offset::new(vx, vy)
+        }
+        _ => Offset::default(),
+    }
+}
+
+/// Like [`interrupt`], returning the live animated velocity before the phase
+/// is cleared so a follow-up [`animate_to`] retargets with continuous velocity.
+fn interrupt_velocity(surface: &Rc<Surface>, view: &NshView) -> Offset {
+    let velocity = live_velocity(phase(view), now());
+    interrupt(surface, view);
+    velocity
+}
+
 /// Ends momentum, its bounce or a snap a new input interrupts
 /// (`onMomentumEnd`, as UIKit sends when a drag catches a glide).
 fn interrupt(surface: &Rc<Surface>, view: &NshView) {
@@ -1256,12 +1287,14 @@ fn report(surface: &Surface, view: &NshView) {
     crate::access::scroll_bar::moved(view);
 }
 
-/// Eases to `to` (clamped to the rest limits).
+/// Springs to `to` (clamped to the rest limits) with initial `velocity`
+/// (points per ms).
 fn animate_to(
     surface: &Rc<Surface>,
     view: &NshView,
     to: Offset,
     duration: f64,
+    velocity: Offset,
     momentum: bool,
     end: bool,
 ) {
@@ -1284,6 +1317,7 @@ fn animate_to(
         Phase::Animate {
             from,
             to,
+            velocity,
             start: now(),
             duration,
             momentum,
@@ -1353,7 +1387,16 @@ fn release(surface: &Rc<Surface>, view: &NshView, v: f32, snap_velocity: f32) {
         if duration > 0.0 {
             emit(surface, view, EventKind::MomentumStart);
         }
-        animate_to(surface, view, target, duration, duration > 0.0, true);
+        let horizontal = view.state().scroll.as_ref().is_some_and(|s| s.horizontal);
+        animate_to(
+            surface,
+            view,
+            target,
+            duration,
+            Offset::default().with(horizontal, v),
+            duration > 0.0,
+            true,
+        );
     } else {
         set_phase(view, Phase::Idle);
         emit(surface, view, EventKind::ScrollEnd);
@@ -1486,14 +1529,28 @@ fn tick(surface: &Rc<Surface>, view: &NshView, now: f64) -> Tick {
         Phase::Animate {
             from,
             to,
+            velocity,
             start,
             duration,
             momentum,
             end,
         } => {
-            let t = (now - start) / duration;
-            moved_to(surface, view, from.lerp(to, ease_out(t)));
-            if t >= 1.0 {
+            let elapsed = (now - start).max(0.0);
+            let done = elapsed >= duration;
+            let next = if done {
+                to
+            } else {
+                Offset::new(
+                    spring_step(Points(from.x), Points(to.x), velocity.x, elapsed, duration)
+                        .0
+                        .0,
+                    spring_step(Points(from.y), Points(to.y), velocity.y, elapsed, duration)
+                        .0
+                        .0,
+                )
+            };
+            moved_to(surface, view, next);
+            if done {
                 set_phase(view, Phase::Idle);
                 if momentum {
                     emit(surface, view, EventKind::MomentumEnd);
@@ -2153,6 +2210,7 @@ pub(crate) fn scroll_by(surface: &Rc<Surface>, view: &NshView, dx: f32, dy: f32)
             Phase::Animate {
                 from,
                 to,
+                velocity,
                 start,
                 duration,
                 momentum,
@@ -2160,6 +2218,7 @@ pub(crate) fn scroll_by(surface: &Rc<Surface>, view: &NshView, dx: f32, dy: f32)
             } => Phase::Animate {
                 from: from + d,
                 to: to + d,
+                velocity,
                 start,
                 duration,
                 momentum,
@@ -2303,7 +2362,8 @@ pub(crate) fn behavior(surface: &Rc<Surface>, view: &NshView, behavior: &ScrollB
     }
     if let Some(room) = held {
         let to = current(view).with(false, -room);
-        animate_to(surface, view, to, ANIMATION, false, false);
+        let velocity = live_velocity(phase(view), now());
+        animate_to(surface, view, to, ANIMATION, velocity, false, false);
     }
 }
 
@@ -2340,9 +2400,11 @@ pub(crate) fn refreshing(surface: &Rc<Surface>, view: &NshView, refreshing: bool
     }
     let at = |y: f32| current(view).with(false, y);
     if refreshing && pos <= 0.5 {
-        animate_to(surface, view, at(-inset), ANIMATION, false, false);
+        let velocity = live_velocity(phase(view), now());
+        animate_to(surface, view, at(-inset), ANIMATION, velocity, false, false);
     } else if !refreshing && pos < 0.0 {
-        animate_to(surface, view, at(0.0), ANIMATION, false, false);
+        let velocity = live_velocity(phase(view), now());
+        animate_to(surface, view, at(0.0), ANIMATION, velocity, false, false);
     }
 }
 
@@ -2392,9 +2454,9 @@ pub(crate) fn command(surface: &Rc<Surface>, view: &NshView, command: &Command) 
         s.live.report = true;
         (clamp(target, lims), animated)
     };
-    interrupt(surface, view);
+    let velocity = interrupt_velocity(surface, view);
     if animated {
-        animate_to(surface, view, target, ANIMATION, false, true);
+        animate_to(surface, view, target, ANIMATION, velocity, false, true);
     } else {
         moved_to(surface, view, target);
     }
@@ -3116,8 +3178,8 @@ pub(crate) fn key_scroll(
             max.along(axis),
         ),
     );
-    interrupt(surface, &view);
-    animate_to(surface, &view, to, KEY_ANIMATION, false, true);
+    let velocity = interrupt_velocity(surface, &view);
+    animate_to(surface, &view, to, KEY_ANIMATION, velocity, false, true);
     // A list follows its real end from here on (rows never rendered are
     // only estimated), and the other keys leave it.
     let id = view.state().id;
@@ -3245,8 +3307,8 @@ fn reveal_with(surface: &Rc<Surface>, target: &NshView, rect_in: impl Fn(&NshVie
         }
         moved_x += to.x - base.x;
         moved_y += to.y - base.y;
-        interrupt(surface, &view);
-        animate_to(surface, &view, to, ANIMATION, false, true);
+        let velocity = interrupt_velocity(surface, &view);
+        animate_to(surface, &view, to, ANIMATION, velocity, false, true);
     }
 }
 
@@ -3445,6 +3507,7 @@ mod tests {
         let gliding = Phase::Animate {
             from: Offset::new(0.0, 0.0),
             to: Offset::new(0.0, 40.0),
+            velocity: Offset::default(),
             start: 0.0,
             duration: KEY_ANIMATION,
             momentum: false,
@@ -3764,5 +3827,46 @@ mod tests {
         let crossing = bounce_duration(Offset::new(0.0, -20.0), Offset::new(0.0, 2.0));
         assert!(crossing <= 11.0, "{crossing}");
         assert_eq!(bounce_at(-20.0, 2.0, 20.0), 0.0);
+    }
+
+    #[test]
+    fn animated_scroll_retargets_with_continuous_velocity_and_no_overshoot() {
+        let phase1 = Phase::Animate {
+            from: Offset::default(),
+            to: Offset::new(0.0, 120.0),
+            velocity: Offset::default(),
+            start: 0.0,
+            duration: ANIMATION,
+            momentum: false,
+            end: true,
+        };
+        let t_retarget = 80.0;
+        let (y_at, v_before) = spring_step(Points(0.0), Points(120.0), 0.0, t_retarget, ANIMATION);
+        let inherited = live_velocity(phase1, t_retarget);
+        assert!(
+            (inherited.y - v_before).abs() < 1e-5,
+            "{inherited:?} vs {v_before}"
+        );
+        // Retarget to 240pt inheriting live velocity: exact C1 velocity
+        // continuity at t=0+, monotonic motion, zero overshoot.
+        let (y_0, v_0) = spring_step(y_at, Points(240.0), inherited.y, 0.0, ANIMATION);
+        let dt = 0.05;
+        let (y_dt, _) = spring_step(y_at, Points(240.0), inherited.y, dt, ANIMATION);
+        let finite_diff = (y_dt.0 - y_at.0) / dt as f32;
+        assert!(
+            (y_0.0 - y_at.0).abs() < 1e-4
+                && (v_0 - v_before).abs() < 1e-4
+                && (finite_diff - v_before).abs() < 0.01,
+            "v_before={v_before} v_0={v_0} finite_diff={finite_diff}"
+        );
+        let mut prev = y_at.0;
+        for step in 1..=300 {
+            let (y, _) = spring_step(y_at, Points(240.0), inherited.y, step as f64, ANIMATION);
+            assert!(
+                y.0 >= prev - 1e-4 && y.0 <= 240.0 + 1e-4,
+                "step={step} prev={prev} y={y:?}"
+            );
+            prev = y.0;
+        }
     }
 }

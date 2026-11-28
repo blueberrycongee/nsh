@@ -194,6 +194,76 @@ impl<M: TextEngine> Core<M> {
         }
     }
 
+    /// Slides `placed.kept` cells of `list` from their pre-turn frames to their
+    /// new frames under `layout` while placing `placed.new` cells (and their
+    /// descendants) directly at their final frames without animation, then
+    /// restores the default (unanimated) layout state so nothing outside the
+    /// list animates. Used when a bottom-aligned short list's `leading()`
+    /// shrinks on an animated append.
+    pub(super) fn animate_list_cells(
+        &mut self,
+        list: Key,
+        placed: Placed,
+        layout: LayoutAnimation,
+    ) {
+        self.list_motion.appeared.extend(placed.new.iter().copied());
+        let (new, kept): (Vec<Key>, Vec<Key>) = placed
+            .kept
+            .into_iter()
+            .chain(placed.new)
+            .partition(|c| self.list_motion.appeared.contains(c));
+        let mut moved = Vec::new();
+        for &cell in &kept {
+            let node = &self.nodes[cell as usize];
+            let to = node.frame;
+            let Some(from) = self
+                .list_motion
+                .start
+                .get(&cell)
+                .copied()
+                .filter(|s| !s.size.width.0.is_nan())
+            else {
+                continue;
+            };
+            if from != to {
+                moved.push((node.id, from, to));
+            }
+        }
+        if moved.is_empty() {
+            return;
+        }
+        let mut instant: FxHashSet<NodeId> = FxHashSet::default();
+        if !new.is_empty() {
+            let cells: FxHashSet<Key> = new.iter().copied().collect();
+            for item in &self.mount {
+                if let MountItem::Frame { id: f, .. } = *item
+                    && let Ok(key) = self.key(f)
+                    && self.within(key, list, &cells)
+                {
+                    instant.insert(f);
+                }
+            }
+        }
+        let sliding: FxHashSet<NodeId> = moved.iter().map(|&(id, ..)| id).collect();
+        let mut at_once = vec![MountItem::LayoutAnimation(LayoutAnimation::default())];
+        let mut slide = vec![MountItem::LayoutAnimation(layout)];
+        self.mount.retain(|item| match *item {
+            MountItem::Frame { id, frame } if instant.contains(&id) => {
+                at_once.push(MountItem::Frame { id, frame });
+                false
+            }
+            MountItem::Frame { id, .. } => !sliding.contains(&id),
+            _ => true,
+        });
+        for (id, from, to) in moved {
+            at_once.push(MountItem::Frame { id, frame: from });
+            slide.push(MountItem::Frame { id, frame: to });
+        }
+        slide.push(MountItem::LayoutAnimation(LayoutAnimation::default()));
+        self.mount.extend(at_once);
+        self.mount.extend(slide);
+    }
+
     /// Whether `key` is one of `cells` of list `list`, or inside one.
     fn within(&self, mut key: Key, list: Key, cells: &FxHashSet<Key>) -> bool {
         while key != NO_KEY && key != list {

@@ -86,10 +86,18 @@
   distance from the end as content changes; with `onLoadMoreAtStart`, only while at it, the visible rows when scrolled away), `maintainVisibleContentPosition` (`autoscrollToBottomThreshold`: a list
   that is not inverted follows its end while within that distance of it, `ListState::anchor_end`; scrolled up, growth
   below the viewport moves nothing; Rust components: `ListLayout::follow_end`, on their own lists and the lists they place; with
-  `animated` (`ListLayout::follow_end_animated`), a step of the end of a quarter viewport or more at once is left to an
-  animated scroll to the end, pinned like `scrollToEnd({ animated: true })` so `follow_pin` retargets it as the content
-  goes on growing and the user's drag ends it; smaller steps, and every step while that scroll is in flight, are not
-  `anchor_end`'s, `ListState::take_animated_end`), `alignment` (`bottom`, GPUI's `ListAlignment::Bottom`: rows in reading order, opens at the end with no scroll command to pin, follows it within `follow_end` or a point's rounding, `ListState::anchor_end`; it waits for an appended last row's measurement the window will reach, so one scroll lands on its real size; short content lies at the bottom, `ListState::leading`), `stickyHeaderIndices` (one column, not inverted) + `stickyHeaderOffset` (where they stick: the core subtracts a number from the sticky ranges, so platforms pin as they do without one; an animated node rides along in `StickyCell::offset`, `ListState::sticky_node`, and the platforms add its value as they pin), `header` /
+  `animated` (`ListLayout::follow_end_animated`), a discrete append at the end (of any height) or a step of the end of a
+  quarter viewport or more at once is left to an animated scroll to the end, pinned like `scrollToEnd({ animated: true })`
+  so `follow_pin` retargets it as the content goes on growing or more rows append (preserving an in-flight animated `End`
+  pin across tail splices/reorders) and the user's drag ends it; smaller incremental steps of an existing last row (streaming
+  text), and every step while that scroll is in flight, are not `anchor_end`'s, `ListState::take_animated_end`; animated
+  scrolls run on a velocity-preserving critically damped spring (`nsh_core::scroll::spring_step` and web `scrollSpringStep`)
+  so bursts retarget continuously without overshoot), `alignment` (`bottom`, GPUI's `ListAlignment::Bottom`: rows in reading
+  order, opens at the end with no scroll command to pin, follows it within `follow_end` or a point's rounding,
+  `ListState::anchor_end`; any `follow_end` list at its end waits for an appended last row's measurement the window will
+  reach, so one scroll lands on its real size; short content lies at the bottom, `ListState::leading`, and with
+  `follow_end_animated` slides existing cells upward on a matching spring when short content grows while placing newly
+  appended rows directly at their final frames), `stickyHeaderIndices` (one column, not inverted) + `stickyHeaderOffset` (where they stick: the core subtracts a number from the sticky ranges, so platforms pin as they do without one; an animated node rides along in `StickyCell::offset`, `ListState::sticky_node`, and the platforms add its value as they pin), `header` /
   `footer` / `empty` / `separator` (a component, called once and untracked, or an element; a signal or memo, as `<If>` and `<Each>` are, is the slot's insert's to track: `slot` in `nsh-js` `list.rs`, `web/browser/list.js`), `contentStyle`
   (padding and gaps, numbers; `alignItems`: `stretch` (default), `flex-start`, `center` or `flex-end` on the cross axis) /
   `contentClass` (`p-*`, `gap-*`, `items-start` / `items-center` / `items-end` / `items-stretch`), `initialScrollAtEnd` (opens at the end before the first frame, keeps it while rows measure, and takes precedence over `initialScrollIndex`; short content stays at the top), `initialScrollIndex`, `onLoadMore` + `loadMoreThreshold`,

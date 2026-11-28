@@ -58,6 +58,14 @@ const INDICATOR_HOLD: f64 = 700.0;
 const INDICATOR_FADE: f64 = 300.0;
 /// Duration of animated scrolls and bounces back (ms).
 const ANIMATION: f64 = 300.0;
+/// Dimensionless decay constant `ω * duration` of a critically damped animated
+/// scroll (`(1 + k) e^{-k} ≈ 0.0061` remaining at `t = duration`, `≈ 0.017` at
+/// `t = 5/6 duration`, giving `response = 2π / ω ≈ 262 ms` for a 300 ms scroll).
+const SPRING_K: f64 = 7.2;
+/// Undamped period (ms) of the 300 ms animated scroll spring, shared with
+/// bottom-aligned short-list cell lifts (`core/mod.rs`).
+pub(crate) const ANIMATION_SPRING_RESPONSE_MS: f32 =
+    (2.0 * std::f64::consts::PI * ANIMATION / SPRING_K) as f32;
 /// The release speed (points per ms) a settled mouse wheel snaps with:
 /// fast enough to move on to the next snap point.
 const WHEEL_SNAP: f32 = 0.6;
@@ -161,12 +169,14 @@ enum Phase {
     },
     /// Momentum after a fling: `velocity` points per ms at `last` (ms).
     Glide { velocity: Offset, last: f64 },
-    /// An eased move from `from` to `to`, started at `start` (ms):
-    /// `momentum` for snapping after a fling (momentum events), `end` to
-    /// send `onScrollEnd` when it arrives.
+    /// A critically damped spring move from `from` to `to` with initial
+    /// `velocity` (points per ms), started at `start` (ms): `momentum` for
+    /// snapping after a fling (momentum events), `end` to send `onScrollEnd`
+    /// when it arrives.
     Animate {
         from: Offset,
         to: Offset,
+        velocity: Offset,
         start: f64,
         duration: f64,
         momentum: bool,
@@ -399,6 +409,45 @@ pub fn ease_out(t: f64) -> f32 {
     (1.0 - (1.0 - t).powi(3)) as f32
 }
 
+/// Evaluates a critically damped spring (`ζ = 1`) from `from` to `to` with
+/// initial `velocity` (points per ms) at elapsed time `elapsed` (ms) out of
+/// `duration` (ms): returns `(position, velocity)`.
+///
+/// Closed-form: `e(t) = (e0 + (v0 + ω e0) t) e^{-ω t}` where `e0 = from - to`
+/// and `ω = SPRING_K / duration`. At `t = 0` it preserves `(from, velocity)`
+/// (C¹ continuity across retargets) and caps only overspeed velocities toward
+/// `to` (`|v0| > ω |e0|`) so it never overshoots a scroll limit.
+#[doc(hidden)]
+pub fn spring_step(
+    from: Points,
+    to: Points,
+    velocity: f32,
+    elapsed: f64,
+    duration: f64,
+) -> (Points, f32) {
+    if duration <= 0.0 || elapsed >= duration {
+        return (to, 0.0);
+    }
+    let t = elapsed.max(0.0);
+    let e0 = f64::from(from.0 - to.0);
+    let omega = SPRING_K / duration;
+    let mut v0 = if velocity.is_finite() {
+        f64::from(velocity)
+    } else {
+        0.0
+    };
+    // Moving toward `to` faster than `ω |e0|` would cross `to` before settling;
+    // capping to `-ω e0` keeps `c2 = 0` (monotonic decay with zero overshoot).
+    if v0 * e0 < 0.0 && v0.abs() > (omega * e0).abs() {
+        v0 = -omega * e0;
+    }
+    let c2 = v0 + omega * e0;
+    let decay = (-omega * t).exp();
+    let e = (e0 + c2 * t) * decay;
+    let v = (v0 - omega * c2 * t) * decay;
+    (Points((f64::from(to.0) + e) as f32), v as f32)
+}
+
 /// How long (ms) an eased move of `distance` that starts at `velocity`
 /// (points per ms, in its direction) takes: ease out starts at 3 ×
 /// distance / duration, which then matches the release.
@@ -492,6 +541,7 @@ fn shifted(phase: Phase, d: Offset, horizontal: bool) -> Phase {
         Phase::Animate {
             from,
             to,
+            velocity,
             start,
             duration,
             momentum,
@@ -499,6 +549,7 @@ fn shifted(phase: Phase, d: Offset, horizontal: bool) -> Phase {
         } => Phase::Animate {
             from: from + d,
             to: to + d,
+            velocity,
             start,
             duration,
             momentum,
@@ -1105,8 +1156,48 @@ fn report(host: &impl ScrollHost) {
     }
 }
 
-/// Eases to `to` (clamped to the rest limits).
-fn animate_to(host: &impl ScrollHost, to: Offset, duration: f64, momentum: bool, end: bool) {
+/// Current velocity (points per ms) of an animation or glide in flight at
+/// `now` (ms), so a retargeted animated scroll continues smoothly without a
+/// velocity jump.
+fn live_velocity(phase: Phase, now: f64) -> Offset {
+    match phase {
+        Phase::Animate {
+            from,
+            to,
+            velocity,
+            start,
+            duration,
+            ..
+        } => {
+            let elapsed = now - start;
+            Offset::new(
+                spring_step(Points(from.x), Points(to.x), velocity.x, elapsed, duration).1,
+                spring_step(Points(from.y), Points(to.y), velocity.y, elapsed, duration).1,
+            )
+        }
+        Phase::Glide { velocity, .. } => velocity,
+        _ => Offset::default(),
+    }
+}
+
+/// Captures any live motion velocity before ending the running phase via
+/// [`interrupt`].
+fn interrupt_velocity(host: &impl ScrollHost) -> Offset {
+    let v = live_velocity(phase(host), host.now());
+    interrupt(host);
+    v
+}
+
+/// Springs to `to` (clamped to the rest limits) with initial `velocity`
+/// (points per ms).
+fn animate_to(
+    host: &impl ScrollHost,
+    to: Offset,
+    velocity: Offset,
+    duration: f64,
+    momentum: bool,
+    end: bool,
+) {
     let Some((from, to)) = host.scroll(|s, size| (s.pos(), to.clamp(s.range(size)))) else {
         return;
     };
@@ -1126,6 +1217,7 @@ fn animate_to(host: &impl ScrollHost, to: Offset, duration: f64, momentum: bool,
         Phase::Animate {
             from,
             to,
+            velocity,
             start: host.now(),
             duration,
             momentum,
@@ -1136,9 +1228,16 @@ fn animate_to(host: &impl ScrollHost, to: Offset, duration: f64, momentum: bool,
 }
 
 /// [`animate_to`] `to` along the main axis, the other where it is.
-fn animate_along(host: &impl ScrollHost, to: f32, duration: f64, momentum: bool, end: bool) {
+fn animate_along(
+    host: &impl ScrollHost,
+    to: f32,
+    velocity: Offset,
+    duration: f64,
+    momentum: bool,
+    end: bool,
+) {
     if let Some(to) = host.scroll(|s, _| s.pos().with(s.horizontal, to)) {
-        animate_to(host, to, duration, momentum, end);
+        animate_to(host, to, velocity, duration, momentum, end);
     }
 }
 
@@ -1178,13 +1277,13 @@ fn release(host: &impl ScrollHost, v: Offset, snap_velocity: f32) {
     let past = |p: f32, min: f32, max: f32| p < min - 0.5 || p > max + 0.5;
     let room = |v: f32, p: f32, min: f32, max: f32| v > 0.0 && p < max || v < 0.0 && p > min;
     if past(pos.x, min.x, max.x) || past(pos.y, min.y, max.y) || (min.y == 0.0 && pos.y < 0.0) {
-        animate_to(host, pos.clamp((min, max)), ANIMATION, false, true);
+        animate_to(host, pos.clamp((min, max)), v, ANIMATION, false, true);
     } else if let Some((target, distance)) = target {
         let duration = snap_duration(Points(distance), main);
         if duration > 0.0 {
             emit(host, EventKind::MomentumStart);
         }
-        animate_to(host, target, duration, duration > 0.0, true);
+        animate_to(host, target, v, duration, duration > 0.0, true);
     } else if v.x.abs().max(v.y.abs()) > MIN_GLIDE
         && (room(v.x, pos.x, min.x, max.x) || room(v.y, pos.y, min.y, max.y))
     {
@@ -1311,14 +1410,17 @@ fn tick(host: &impl ScrollHost, now: f64) -> bool {
         Phase::Animate {
             from,
             to,
+            velocity,
             start,
             duration,
             momentum,
             end,
         } => {
-            let t = (now - start) / duration;
-            moved_to(host, from.lerp(to, ease_out(t)));
-            if t >= 1.0 {
+            let elapsed = now - start;
+            let (x, _) = spring_step(Points(from.x), Points(to.x), velocity.x, elapsed, duration);
+            let (y, _) = spring_step(Points(from.y), Points(to.y), velocity.y, elapsed, duration);
+            moved_to(host, Offset::new(x.0, y.0));
+            if elapsed >= duration {
                 set_phase(host, Phase::Idle);
                 if momentum {
                     emit(host, EventKind::MomentumEnd);
@@ -1559,7 +1661,8 @@ pub fn behavior(host: &impl ScrollHost, behavior: &ScrollBehavior) {
         host.redraw();
     }
     if let Some(room) = held {
-        animate_along(host, -room, ANIMATION, false, false);
+        let velocity = live_velocity(phase(host), host.now());
+        animate_along(host, -room, velocity, ANIMATION, false, false);
     }
 }
 
@@ -1593,9 +1696,11 @@ pub fn refreshing(host: &impl ScrollHost, refreshing: bool) {
         return;
     }
     if refreshing && pos <= 0.5 {
-        animate_along(host, -inset, ANIMATION, false, false);
+        let velocity = live_velocity(phase(host), host.now());
+        animate_along(host, -inset, velocity, ANIMATION, false, false);
     } else if !refreshing && pos < 0.0 {
-        animate_along(host, 0.0, ANIMATION, false, false);
+        let velocity = live_velocity(phase(host), host.now());
+        animate_along(host, 0.0, velocity, ANIMATION, false, false);
     }
 }
 
@@ -1642,9 +1747,9 @@ pub fn command(host: &impl ScrollHost, command: &Command) {
     }) else {
         return;
     };
-    interrupt(host);
+    let velocity = interrupt_velocity(host);
     if animated {
-        animate_to(host, target, ANIMATION, false, true);
+        animate_to(host, target, velocity, ANIMATION, false, true);
     } else {
         moved_to(host, target);
     }
@@ -2224,8 +2329,8 @@ pub fn wheel_step(host: &impl ScrollHost, delta: Point<Points>) {
         // Headed there already (at an edge): nothing changes.
         return;
     }
-    interrupt(host);
-    animate_along(host, to, WHEEL_STEP_ANIMATION, false, true);
+    let velocity = interrupt_velocity(host);
+    animate_along(host, to, velocity, WHEEL_STEP_ANIMATION, false, true);
 }
 
 // The keyboard.
@@ -2327,8 +2432,8 @@ pub fn key_scroll(host: &impl ScrollHost, m: KeyMove, flip: bool) {
         m => m,
     };
     let to = key_target(moved, base, viewport, min, max);
-    interrupt(host);
-    animate_along(host, to, KEY_ANIMATION, false, true);
+    let velocity = interrupt_velocity(host);
+    animate_along(host, to, velocity, KEY_ANIMATION, false, true);
     // A list follows its real end from here on (rows never rendered are
     // only estimated), and the other keys leave it. The key's own move,
     // as the backends with a key scroll of their own report it.
@@ -2393,8 +2498,8 @@ pub fn reveal(host: &impl ScrollHost, start: Points, len: Points) -> Points {
     if (to - base).abs() < 0.5 {
         return Points(0.0);
     }
-    interrupt(host);
-    animate_along(host, to, ANIMATION, false, true);
+    let velocity = interrupt_velocity(host);
+    animate_along(host, to, velocity, ANIMATION, false, true);
     Points(to - base)
 }
 
@@ -2667,6 +2772,7 @@ mod tests {
         let anim = Phase::Animate {
             from: y(0.0),
             to: y(100.0),
+            velocity: Offset::default(),
             start: 1.0,
             duration: 300.0,
             momentum: false,
@@ -3304,6 +3410,7 @@ mod tests {
             Phase::Animate {
                 from: Offset::default(),
                 to: Offset::new(0.0, 400.0),
+                velocity: Offset::default(),
                 start: 0.0,
                 duration: ANIMATION,
                 momentum: false,
@@ -3506,5 +3613,63 @@ mod tests {
         frame(&host, 0.0);
         let reports = host.reports.borrow();
         assert_eq!(reports[reports.len() - 2..], ["zoom 1", "scroll 0 0"]);
+    }
+
+    #[test]
+    fn animated_scroll_retargets_with_continuous_velocity_and_no_overshoot() {
+        let host = TestHost::new(scroll_state((300.0, 10_000.0), false));
+        // Start an animated scroll from 0 to 120.
+        command(
+            &host,
+            &Command::ScrollTo {
+                x: Points::ZERO,
+                y: Points(120.0),
+                animated: true,
+            },
+        );
+        // Step in small increments to 60ms and measure instantaneous velocity
+        // just before retargeting.
+        assert!(host.tick(59.0));
+        let y_before = host.state.borrow().y.0;
+        assert!(host.tick(60.0));
+        let y_at = host.state.borrow().y.0;
+        let v_before = y_at - y_before; // points per ms
+        assert!(v_before > 0.1, "should be moving smoothly: {v_before}");
+
+        // Retarget further forward to 240 at t = 60ms (simulating burst send):
+        // a velocity-preserving critically damped spring keeps v(t) continuous
+        // (no cubic ease-out jump to a huge fresh initial velocity).
+        command(
+            &host,
+            &Command::ScrollTo {
+                x: Points::ZERO,
+                y: Points(240.0),
+                animated: true,
+            },
+        );
+        assert!(host.tick(61.0));
+        let y_after = host.state.borrow().y.0;
+        let v_after = y_after - y_at;
+        assert!(
+            (v_after - v_before).abs() < 0.25,
+            "velocity discontinuity on retarget: before={v_before:.4} after={v_after:.4}"
+        );
+
+        // Advance frame-by-frame to deadline: monotonically approaches 240 with
+        // zero overshoot and settles cleanly at 240.
+        let mut prev = y_after;
+        let mut t = 61.0;
+        while t < 60.0 + ANIMATION {
+            t = (t + 8.0).min(60.0 + ANIMATION);
+            host.tick(t);
+            let cur = host.state.borrow().y.0;
+            assert!(
+                cur >= prev - 1e-3 && cur <= 240.0 + 1e-3,
+                "non-monotonic or overshoot at t={t}: prev={prev} cur={cur}"
+            );
+            prev = cur;
+        }
+        assert_eq!(host.state.borrow().y.0, 240.0);
+        assert!(matches!(host.state.borrow().live.phase, Phase::Idle));
     }
 }

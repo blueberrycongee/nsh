@@ -353,13 +353,27 @@ pub(super) struct ListState {
     /// a list that is not inverted follows the end of its content while
     /// it is within this distance of it.
     pub(super) follow_end: Option<f32>,
-    /// `maintainVisibleContentPosition`'s `animated`: with `follow_end`, an
-    /// end that moves away by [`ANIMATED_FOLLOW_STEP`] or more at once is
-    /// followed by an animated scroll pinned to the end.
+    /// `maintainVisibleContentPosition`'s `animated`: with `follow_end` (or
+    /// `alignment="bottom"`), an appended row at the end or a large step of
+    /// [`ANIMATED_FOLLOW_STEP`] or more is followed by an animated scroll
+    /// pinned to the end.
     follow_end_animated: bool,
-    /// [`ListState::anchor_end`] left a large step of the end to an
-    /// animated scroll the core sends ([`ListState::take_animated_end`]).
+    /// [`ListState::anchor_end`] left a step of the end to an animated scroll
+    /// the core sends ([`ListState::take_animated_end`]).
     animated_end: bool,
+    /// New items were appended at the end since the last settled
+    /// [`ListState::anchor_end`]: with `follow_end_animated`, discrete tail
+    /// appends always animate (even a short single-line message), while
+    /// incremental growth of an existing last row (streaming text) still uses
+    /// [`ANIMATED_FOLLOW_STEP`].
+    appended_at_end: bool,
+    /// `leading()` when the list last settled (bottom-aligned lists; NaN
+    /// before the first layout).
+    anchored_leading: f32,
+    /// [`ListState::anchor_end`] saw a bottom-aligned short list's `leading()`
+    /// shrink on an animated append: the core slides kept cells upward while
+    /// placing the new cell at its final frame ([`ListState::take_animated_leading`]).
+    animated_leading: bool,
     /// Where the list rests ([`ListAlignment`]; an inverted list ignores it).
     pub(super) alignment: ListAlignment,
     /// `stickyHeaderIndices`, sorted.
@@ -492,6 +506,9 @@ impl ListState {
             follow_end: None,
             follow_end_animated: false,
             animated_end: false,
+            appended_at_end: false,
+            anchored_leading: f32::NAN,
+            animated_leading: false,
             alignment: ListAlignment::Top,
             sticky: Vec::new(),
             kept: Vec::new(),
@@ -548,6 +565,9 @@ impl ListState {
         self.pin = None;
         self.dirty = true;
         self.anchored_end = f32::NAN;
+        self.anchored_leading = f32::NAN;
+        self.animated_leading = false;
+        self.appended_at_end = false;
         if parent {
             let set_aside = SetAside {
                 inverted: std::mem::take(&mut self.inverted),
@@ -640,8 +660,11 @@ impl ListState {
             return;
         }
         self.items_changed = true;
-        // The visible content keeps its place instead.
-        self.pin = None;
+        // An animated scroll to the end stays pinned across tail appends so
+        // rapid bursts retarget to the new end instead of losing bottom-follow.
+        if !self.animating_to_end() {
+            self.pin = None;
+        }
         let anchor = self
             .reading_anchor()
             .filter(|&(index, _)| index >= at + removed)
@@ -653,6 +676,9 @@ impl ListState {
             std::iter::repeat_n(f32::NAN, inserted as usize),
         );
         self.count = self.count - removed + inserted;
+        if removed == 0 && inserted > 0 && at + inserted == self.count {
+            self.appended_at_end = true;
+        }
         self.follow_items(|i: u32| -> Option<u32> {
             if i < at {
                 Some(i)
@@ -690,7 +716,9 @@ impl ListState {
             return;
         }
         self.items_changed = true;
-        self.pin = None;
+        if !self.animating_to_end() {
+            self.pin = None;
+        }
         let anchor = self.visible_anchor().and_then(|(cut, _)| {
             let (first, _) = self.reading_anchor()?;
             let top = self.natural_offset();
@@ -717,6 +745,9 @@ impl ListState {
         }
         self.sizes = sizes;
         self.count = diff.new_len;
+        if diff.runs.last().is_some_and(|r| r.from().is_none()) {
+            self.appended_at_end = true;
+        }
         let indices = diff.new_indices();
         self.follow_items(|i| indices.get(i as usize).copied().flatten());
         self.kept.sort_unstable();
@@ -1112,6 +1143,13 @@ impl ListState {
             // list may report itself farther from there by as much.
             pin.at += anchored;
             pin.nearest += anchored.abs();
+            // Wait for an appended last row already in the render window to
+            // measure before retargeting the animated end scroll, so one
+            // retarget lands directly on its real height.
+            if pin.target == PinTarget::End && self.last_row_being_measured() {
+                self.pin = Some(pin);
+                return Follow::Stay;
+            }
             let follow = if (target - pin.at).abs() > PIN_SLACK {
                 pin.at = target;
                 // The retargeted animation comes nearer from where it is.
@@ -1416,6 +1454,9 @@ impl ListState {
             }
         }
         let old = self.sizes.len() as u32;
+        if count > old {
+            self.appended_at_end = true;
+        }
         self.sizes.resize(count as usize, f32::NAN);
         self.resize_rows(old);
         if self.load_more_at.is_some_and(|c| c != count) {
@@ -1541,6 +1582,8 @@ impl ListState {
         if inverted != self.inverted {
             self.inverted = inverted;
             self.anchored_end = f32::NAN;
+            self.anchored_leading = f32::NAN;
+            self.animated_leading = false;
             self.dirty = true;
         }
     }
@@ -1557,7 +1600,12 @@ impl ListState {
         }
         if threshold != self.follow_end {
             self.follow_end = threshold;
-            self.anchored_end = f32::NAN;
+            // Before the first layout `anchored_end` is already NaN; once laid
+            // out, keep the tracked end so toggling `follow_end` or updating
+            // its threshold does not lose anchoring on the same commit.
+            if self.viewport <= 0.0 {
+                self.anchored_end = f32::NAN;
+            }
             self.dirty = true;
         }
     }
@@ -1574,6 +1622,8 @@ impl ListState {
         if alignment != self.alignment {
             self.alignment = alignment;
             self.anchored_end = f32::NAN;
+            self.anchored_leading = f32::NAN;
+            self.animated_leading = false;
             self.dirty = true;
         }
     }
@@ -1731,6 +1781,7 @@ impl ListState {
     pub(super) fn anchor_end(&mut self, kept: f32) -> f32 {
         self.measured_scroll = 0.0;
         self.animated_end = false;
+        self.animated_leading = false;
         let revealing = std::mem::take(&mut self.revealing);
         if self.viewport <= 0.0 {
             return 0.0;
@@ -1738,22 +1789,47 @@ impl ListState {
         if !self.inverted {
             let end = self.own_end();
             let bottom = self.bottom();
+            let leading = self.leading();
             let threshold = match self.follow_end {
                 Some(threshold) => threshold,
                 None if bottom => PIN_SLACK,
-                None => return 0.0,
+                None => {
+                    // Keep the end tracked even while `follow_end` is off so
+                    // turning it back on has the exact prior baseline.
+                    self.anchored_end = end;
+                    self.anchored_leading = leading;
+                    self.appended_at_end = false;
+                    return 0.0;
+                }
             };
-            if bottom && !self.anchored_end.is_nan() && self.last_row_being_measured() {
-                // One scroll, to where the row really ends: scrolling by
-                // its estimate first would overshoot and be clamped back.
+            if !self.anchored_end.is_nan() && self.last_row_being_measured() {
+                // One scroll (or short-list lift), to where the row really
+                // ends: moving by its estimate first would overshoot and be
+                // clamped back. Keep `appended_at_end` and `anchored_leading`
+                // until the row measures.
                 self.anchored_end += kept;
                 return 0.0;
             }
+            let appended = std::mem::take(&mut self.appended_at_end);
             let was = std::mem::replace(&mut self.anchored_end, end);
+            let prev_leading = std::mem::replace(&mut self.anchored_leading, leading);
             // A bottom-aligned list opens at its end, without a scroll
             // command to pin and follow while its rows are measured.
             let opening = bottom && was.is_nan();
             let distance = was - (self.offset - kept);
+            // A bottom-aligned short list whose `leading()` shrank on an
+            // animated append (offset stays 0 or crosses into overflow)
+            // slides its existing cells upward instead of teleporting them.
+            if !opening
+                && !revealing
+                && bottom
+                && self.follow_end_animated
+                && !prev_leading.is_nan()
+                && leading < prev_leading
+                && (appended || prev_leading - leading >= self.viewport * ANIMATED_FOLLOW_STEP)
+            {
+                self.animated_leading = true;
+            }
             // Rows above the viewport shrinking while visible ones grow can
             // leave the end where it was and the offset short of it.
             // A negative distance is native overscroll, not a row falling
@@ -1771,13 +1847,14 @@ impl ListState {
                 return 0.0;
             }
             let delta = end - self.offset;
-            if self.follow_end_animated && self.follow_end.is_some() && !opening {
-                if self.animating_to_end() {
-                    // The scroll in flight lands at the end: a jump under it
-                    // would cut it short.
-                    return 0.0;
-                }
-                if delta >= self.viewport * ANIMATED_FOLLOW_STEP {
+            if self.animating_to_end() && !opening {
+                // An animated scroll in flight lands at the end (and
+                // `follow_pin` retargets it): a jump under it would cut it
+                // short.
+                return 0.0;
+            }
+            if self.follow_end_animated && !opening {
+                if delta > 0.0 && (appended || delta >= self.viewport * ANIMATED_FOLLOW_STEP) {
                     // The platform animates there from where the list is.
                     self.animated_end = true;
                     return 0.0;
@@ -1786,6 +1863,7 @@ impl ListState {
             self.offset = end;
             return delta;
         }
+        self.appended_at_end = false;
         let end = (self.content_len() - self.viewport).max(0.0);
         let delta = if self.anchored_end.is_nan() {
             end - self.offset
@@ -1801,6 +1879,20 @@ impl ListState {
     /// scroll, once: the core pins the end and sends the scroll.
     pub(super) fn take_animated_end(&mut self) -> bool {
         std::mem::take(&mut self.animated_end)
+    }
+
+    /// Whether the last [`ListState::anchor_end`] shrank a bottom-aligned
+    /// short list's `leading()` under `follow_end_animated`: the core slides
+    /// existing cells upward while placing newly appended cells at their final
+    /// frame.
+    pub(super) fn take_animated_leading(&mut self) -> bool {
+        std::mem::take(&mut self.animated_leading)
+    }
+
+    /// Whether this list may animate `leading()` shifts on short bottom-aligned
+    /// appends, so `Core` records pre-turn cell starts.
+    pub(super) fn animates_leading(&self) -> bool {
+        self.bottom() && self.follow_end_animated
     }
 
     /// An animated scroll to the end is in flight (`scrollToEnd` or a

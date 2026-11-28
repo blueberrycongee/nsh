@@ -11404,6 +11404,7 @@ impl<M: TextEngine> Core<M> {
             list.pin(Some(PinTarget::End), end, true);
             retarget = Some(end);
         }
+        let animate_leading = list.take_animated_leading();
 
         // The End key's commands, if any, are resolved below with the
         // rest (`Core::key_scrolled`).
@@ -11584,7 +11585,7 @@ impl<M: TextEngine> Core<M> {
         // passed ([`Core::set_left_behind`]).
         let (window_start, window_end) = list.render_window();
         let motion = outer.is_none() && self.list_motion.active();
-        if motion {
+        if motion || (outer.is_none() && list.animates_leading()) {
             let cells: Vec<Key> = list
                 .slots
                 .iter()
@@ -11854,6 +11855,19 @@ impl<M: TextEngine> Core<M> {
         }
         if motion {
             self.move_list_cells(key, id, horizontal, anchor, placed);
+        } else if animate_leading && self.scoped_layout.is_empty() {
+            let spring = crate::LayoutTransition::new(
+                crate::LayoutCurve::FittedSpring { damping_ratio: 1.0 },
+                crate::scroll::ANIMATION_SPRING_RESPONSE_MS,
+            );
+            self.animate_list_cells(
+                key,
+                placed,
+                crate::LayoutAnimation {
+                    update: Some(spring),
+                    ..crate::LayoutAnimation::default()
+                },
+            );
         }
     }
 }
