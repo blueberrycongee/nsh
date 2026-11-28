@@ -178,10 +178,13 @@ impl<M: TextEngine> Core<M> {
             return None;
         }
         let inner = match node.scroll.as_deref() {
-            Some(scroll) => point(
-                Points((p.x.0 + scroll.offset.0) / scroll.zoom),
-                Points((p.y.0 + scroll.offset.1) / scroll.zoom),
-            ),
+            Some(scroll) => {
+                let (sx, sy) = self.content_offset(key);
+                point(
+                    Points((p.x.0 + sx) / scroll.zoom),
+                    Points((p.y.0 + sy) / scroll.zoom),
+                )
+            }
             None => p,
         };
         Some(PointerHit {

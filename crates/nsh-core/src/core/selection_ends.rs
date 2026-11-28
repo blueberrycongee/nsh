@@ -73,10 +73,8 @@ impl<M: TextEngine> TextTree for Nodes<'_, M> {
             .as_deref()
             .map_or((Point::default(), 1.0), |s| {
                 let zoom = if s.zoom > 0.0 { s.zoom } else { 1.0 };
-                (
-                    point(Points(s.offset.0 / zoom), Points(s.offset.1 / zoom)),
-                    zoom,
-                )
+                let (x, y) = self.0.content_offset(key);
+                (point(Points(x / zoom), Points(y / zoom)), zoom)
             })
     }
 }
